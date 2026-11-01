@@ -174,3 +174,4 @@ class LlamaServerBackend:
 
         # Return a normalized representation of evaluated tokens
         return [float(t) for t in self._state_tokens]
+

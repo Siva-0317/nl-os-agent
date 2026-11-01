@@ -19,5 +19,6 @@ where = ["src"]
 
 [tool.pyright]
 extraPaths = [
-    "src"
+    "src",
+    "scripts"
 ]

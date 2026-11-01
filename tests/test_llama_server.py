@@ -13,16 +13,13 @@ import requests
 _src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if _src not in sys.path:
     sys.path.insert(0, _src)
-_scripts = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
-if _scripts not in sys.path:
-    sys.path.insert(0, _scripts)
 
 from nlagent.backends.llama_server import (
     CompletionResult,
     LlamaServerBackend,
     LlamaTimings,
 )
-from e0_equality import generate_e0_prompts, run_e0_experiment
+from nlagent.bench.e0 import generate_e0_prompts, run_e0_experiment
 
 
 def make_mock_http_response(
@@ -208,3 +205,4 @@ def test_e0_experiment_detects_deliberate_mismatch(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
