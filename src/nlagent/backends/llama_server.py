@@ -63,16 +63,37 @@ class CompletionResult:
         return LlamaTimings.from_dict(self.timings)
 
 
+def resolve_local_endpoint(endpoint_url: str = "http://127.0.0.1:8080/completion") -> str:
+    """Probe 8080 (llama-server) and 1234 (LM Studio) to auto-select active local server."""
+    if endpoint_url != "http://127.0.0.1:8080/completion":
+        return endpoint_url
+    try:
+        r = requests.get("http://127.0.0.1:8080/health", timeout=0.25)
+        if r.status_code == 200:
+            return endpoint_url
+    except Exception:
+        pass
+    try:
+        r = requests.get("http://127.0.0.1:1234/v1/models", timeout=0.25)
+        if r.status_code == 200:
+            return "http://127.0.0.1:1234/v1/chat/completions"
+    except Exception:
+        pass
+    return endpoint_url
+
+
 class LlamaServerBackend:
     """HTTP client for llama-server implementing completion and state operations."""
 
     def __init__(
         self,
         endpoint_url: str = "http://127.0.0.1:8080/completion",
+        model_name: str | None = None,
         timeout: float = 60.0,
         session: requests.Session | None = None,
     ) -> None:
         self.endpoint_url = endpoint_url
+        self.model_name = model_name
         self.timeout = timeout
         self.session = session or requests.Session()
         self.last_timings: dict[str, Any] = {}
@@ -87,13 +108,24 @@ class LlamaServerBackend:
         stop: list[str] | None = None,
         **extra_params: Any,
     ) -> CompletionResult:
-        """Send a completion request to llama-server /completion and record timings."""
-        payload: dict[str, Any] = {
-            "prompt": prompt,
-            "cache_prompt": cache_prompt,
-            "temperature": temperature,
-            "n_predict": n_predict,
-        }
+        """Send a completion request to llama-server or OpenAI-compatible endpoint."""
+        prompt_str = prompt if isinstance(prompt, str) else " ".join(str(x) for x in prompt)
+
+        if "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url:
+            model_id = self.model_name or extra_params.pop("model", "nvidia/nemotron-3-nano-4b")
+            payload: dict[str, Any] = {
+                "model": model_id,
+                "messages": [{"role": "user", "content": prompt_str}],
+                "temperature": temperature,
+                "max_tokens": n_predict,
+            }
+        else:
+            payload = {
+                "prompt": prompt,
+                "cache_prompt": cache_prompt,
+                "temperature": temperature,
+                "n_predict": n_predict,
+            }
         if stop:
             payload["stop"] = stop
         payload.update(extra_params)
@@ -118,8 +150,29 @@ class LlamaServerBackend:
                 )
 
             data = resp.json()
-            content = data.get("content", "")
+            if "content" in data:
+                content = data["content"]
+            elif "choices" in data and len(data["choices"]) > 0:
+                first = data["choices"][0]
+                if isinstance(first, dict):
+                    if "message" in first and isinstance(first["message"], dict):
+                        content = first["message"].get("content", "")
+                    elif "text" in first:
+                        content = first.get("text", "")
+                    else:
+                        content = str(first)
+                else:
+                    content = str(first)
+            else:
+                content = ""
+
             timings = data.get("timings", {})
+            if not timings and "usage" in data:
+                usage = data["usage"]
+                timings = {
+                    "prompt_n": usage.get("prompt_tokens", 0),
+                    "predicted_n": usage.get("completion_tokens", 0),
+                }
             self.last_timings = dict(timings)
 
             return CompletionResult(

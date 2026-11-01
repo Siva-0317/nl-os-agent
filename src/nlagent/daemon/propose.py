@@ -84,6 +84,11 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
 
     text = raw_text.strip()
 
+    # Strip <think>...</think> reasoning blocks emitted by models like Nemotron / DeepSeek
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    if "</think>" in text:
+        text = text.split("</think>")[-1].strip()
+
     # Remove markdown code fences if present
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if fence_match:
@@ -136,7 +141,7 @@ def propose(
     env: dict[str, Any] | None = None,
     system_prompt: str | None = None,
     temperature: float = 0.0,
-    n_predict: int = 128,
+    n_predict: int = 256,
 ) -> dict[str, Any]:
     """
     Safe command proposal pipeline.

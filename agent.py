@@ -93,6 +93,26 @@ def display_entities(session: SessionState) -> None:
     console.print(table)
 
 
+def resolve_endpoint(requested: str) -> str:
+    """Probe 8080 (llama-server) and 1234 (LM Studio) to auto-select active local server."""
+    if requested != "http://127.0.0.1:8080/completion":
+        return requested
+    import requests
+    try:
+        r = requests.get("http://127.0.0.1:8080/health", timeout=0.3)
+        if r.status_code == 200:
+            return requested
+    except Exception:
+        pass
+    try:
+        r = requests.get("http://127.0.0.1:1234/v1/models", timeout=0.3)
+        if r.status_code == 200:
+            return "http://127.0.0.1:1234/v1/chat/completions"
+    except Exception:
+        pass
+    return requested
+
+
 def main():
     parser = argparse.ArgumentParser(description="NL OS Agent Interactive Shell")
     parser.add_argument(
@@ -118,7 +138,8 @@ def main():
     # Initialize runtime components
     session = SessionState(cwd=args.cwd)
     verified_cache = VerifiedCommandCache(threshold=args.cache_threshold)
-    backend = LlamaServerBackend(endpoint_url=args.endpoint)
+    active_endpoint = resolve_endpoint(args.endpoint)
+    backend = LlamaServerBackend(endpoint_url=active_endpoint)
     env = get_default_env(cwd=session.cwd)
 
     console.print(f"[dim]OS: {env['os']} | Shell: {env['shell']} | User: {env['user']}[/dim]")

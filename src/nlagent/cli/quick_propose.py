@@ -18,7 +18,7 @@ for p in (_root, _src):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from nlagent.backends.llama_server import LlamaServerBackend
+from nlagent.backends.llama_server import LlamaServerBackend, resolve_local_endpoint
 from nlagent.cache.verified_cache import VerifiedCommandCache
 from nlagent.context.state import SessionState
 from nlagent.daemon.propose import get_default_env, propose
@@ -33,7 +33,7 @@ def main():
 
     session = SessionState(cwd=cwd)
     cache = VerifiedCommandCache(threshold=0.88)
-    backend = LlamaServerBackend()
+    backend = LlamaServerBackend(endpoint_url=resolve_local_endpoint())
     env = get_default_env(cwd=cwd)
 
     try:
@@ -56,3 +56,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

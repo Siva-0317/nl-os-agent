@@ -100,3 +100,4 @@ tokenizer.save_pretrained("lora_adapter")
 # Export directly to Q4_K_M GGUF for local llama-server execution
 model.save_pretrained_gguf("model_q4_km", tokenizer, quantization_method="q4_k_m")
 print("Model training and GGUF export complete!")
+

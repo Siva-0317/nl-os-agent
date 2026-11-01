@@ -203,3 +203,4 @@ These numbers give the exact physical memory overhead of the KV cache buffers fo
 6. [ ] **Step 1 (Colab)**: Open Colab, upload `datasets/finetune_val.jsonl`, run [`scripts/colab_unsloth_finetuning.py`](file:///d:/Final%20yr%20Proj/scripts/colab_unsloth_finetuning.py) for a 30-step smoke test.
 7. [ ] **Step 2 (Local)**: Start `llama-server` and note the `llama_kv_cache_init` buffer allocation line.
 8. [ ] **Step 3 (Demo)**: Wire the thin `quick_propose` CLI helper to test the `Ctrl+G` terminal keybinding.
+
