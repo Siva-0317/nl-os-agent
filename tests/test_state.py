@@ -136,17 +136,23 @@ def test_render_size_bound_truncates_oldest_items_first():
     assert count_tokens_approx(rendered_tight) <= tight_budget
     assert rendered_tight.startswith("STATE cwd=/home/u/proj")
 
-    # The newest entity (file_5.txt) must be preserved longer than oldest (file_1.txt)
-    if "ENT" in rendered_tight:
-        assert "file_5.txt" in rendered_tight
-        assert "file_1.txt" not in rendered_tight
+    # 3. Intermediate budget where ENT is guaranteed to fit with truncation
+    inter_budget = 5
+    rendered_inter = state.render(max_tokens=inter_budget)
+    assert count_tokens_approx(rendered_inter) <= inter_budget
+    assert "ENT" in rendered_inter
+    # Non-vacuous: newest entity (file_5.txt) is preserved, oldest (file_1.txt) is evicted
+    assert "file_5.txt" in rendered_inter
+    assert "file_1.txt" not in rendered_inter
 
 
 def test_render_minimal_fallback_on_tiny_budget():
-    """Verifies that an extremely low max_tokens does not crash and respects budget."""
+    """Verifies that an extremely low max_tokens does not crash, respects budget, and produces non-empty output."""
     state = SessionState(cwd="/home/u/proj")
     state.record_entity(name="test.txt", entity_type="file", path="./test.txt", turn=1)
     state.record_effect(turn=1, command="echo test", summary="printed")
 
     rendered = state.render(max_tokens=2)
     assert count_tokens_approx(rendered) <= 2
+    assert len(rendered) > 0
+    assert "STATE" in rendered

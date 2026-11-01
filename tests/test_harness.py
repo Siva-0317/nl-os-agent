@@ -96,12 +96,17 @@ def test_single_request_mocked(tmp_path):
     assert isinstance(rec, BenchmarkRecord)
     assert rec.status == "success"
     assert rec.session_id == "sess_alpha"
+    assert rec.prompt == "how much space"
     assert rec.turn_index == 0
     assert rec.response_text == "df -h"
     assert rec.timings["cache_n"] == 20
     assert rec.wall_time_s >= 0.0
     assert rec.error is None
     assert os.path.exists(jsonl_file)
+    mock_session.post.assert_called_once()
+    call_args, call_kwargs = mock_session.post.call_args
+    assert call_kwargs["json"]["prompt"] == "how much space"
+    assert call_kwargs["json"]["cache_prompt"] is True
 
 
 def test_jsonl_schema_validation(tmp_path):

@@ -39,16 +39,22 @@ L1_SAMPLE = {
 
 
 def test_prompt_parts_structure():
-    """Verify PromptParts dataclass attributes."""
+    """Verify PromptParts dataclass attributes with non-vacuous content assertions."""
     parts = build_prompt(L0_SAMPLE, L1_SAMPLE, "STATE cwd=/home/u", "list files")
     assert isinstance(parts, PromptParts)
-    assert isinstance(parts.l0_text, str)
-    assert isinstance(parts.l1_text, str)
-    assert isinstance(parts.l2_text, str)
-    assert isinstance(parts.full_text, str)
-    assert parts.l0_text in parts.full_text
-    assert parts.l1_text in parts.full_text
-    assert parts.l2_text in parts.full_text
+    assert len(parts.l0_text) > 0
+    assert len(parts.l1_text) > 0
+    assert len(parts.l2_text) > 0
+    assert len(parts.full_text) > 0
+
+    # Ensure actual inputs are preserved in parts
+    assert L0_SAMPLE in parts.l0_text
+    assert "os: Ubuntu" in parts.l1_text
+    assert "STATE cwd=/home/u" in parts.l2_text
+    assert "list files" in parts.l2_text
+
+    # Ensure full_text is strictly assembled from the components
+    assert parts.full_text == f"{parts.l0_text}\n\n{parts.l1_text}\n\n{parts.l2_text}"
 
 
 def test_byte_identical_l0_l1_prefixes_different_state_and_request():

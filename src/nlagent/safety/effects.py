@@ -105,8 +105,25 @@ def analyse(command: str, cwd: str) -> Effect:
             if "-c" in parts or "-e" in parts:
                 e.opaque = True; e.notes.append("inline interpreter code")
     allp = e.deletes + e.overwrites + e.perm_changes
-    e.protected_hit = any(os.path.abspath(p) == pr or os.path.abspath(p).startswith(pr.rstrip("/") + "/")
-                          for p in allp for pr in PROTECTED if pr not in ("/",)) or any(os.path.abspath(p) == "/" for p in allp)
+    for p in allp:
+        norm_p = os.path.normpath(os.path.abspath(p)).replace("\\", "/")
+        if norm_p in ("/", "C:/", "D:/") or (len(norm_p) == 3 and norm_p.endswith(":/")):
+            e.protected_hit = True
+            break
+        for pr in PROTECTED:
+            if pr in ("/",):
+                continue
+            norm_pr = os.path.normpath(pr).replace("\\", "/").rstrip("/")
+            if norm_p == norm_pr or norm_p.startswith(norm_pr + "/"):
+                e.protected_hit = True
+                break
+            if len(norm_p) >= 2 and norm_p[1] == ":":
+                without_drive = norm_p[2:]
+                if without_drive == norm_pr or without_drive.startswith(norm_pr + "/"):
+                    e.protected_hit = True
+                    break
+        if e.protected_hit:
+            break
     return e
 
 def tier_from_effect(e: Effect) -> str:

@@ -208,10 +208,12 @@ def test_e0_greedy_output_equality_cached_vs_uncached():
     cache = HierarchicalPrefixCache(backend=backend_cached)
 
     res1_cached = cache.process(tokens_turn1, b0_len=b0_len, b1_len=b1_len)
-    # Verify Turn 1 equality
+    # Verify Turn 1 equality (both internal state and generated greedy outputs)
     assert backend_cached.state_tokens == backend_uncached.state_tokens
+    assert res1_cached.output == out1_uncached
 
     res2_cached = cache.process(tokens_turn2, b0_len=b0_len, b1_len=b1_len)
-    # Verify Turn 2 equality (cached hit at B1 produced exact same state as full baseline)
+    # Verify Turn 2 equality (cached hit at B1 produced exact same state and output as full baseline)
     assert res2_cached.hit_boundary == "B1"
     assert backend_cached.state_tokens == backend_uncached2.state_tokens
+    assert res2_cached.output == out2_uncached

@@ -111,8 +111,11 @@ def test_cross_environment_isolation_on_lookup():
     proposal = {"command": "npm test", "risk_tier": "read_only"}
     cache.record_success("run the test suite", env_a, proposal)
 
-    # Hits in exact matching environment
-    assert cache.lookup("run the test suite", env_a) is not None
+    # Hits in exact matching environment with exact expected proposal content
+    hit_a = cache.lookup("run the test suite", env_a)
+    assert hit_a is not None
+    assert hit_a["command"] == "npm test"
+    assert hit_a["risk_tier"] == "read_only"
 
     # Completely misses in different OS/shell/cwd
     assert cache.lookup("run the test suite", env_b) is None
@@ -243,7 +246,9 @@ def test_cache_invalidation_by_cwd():
     assert removed == 1
     assert len(cache) == 1
     assert cache.lookup("task A", env_dir1) is None
-    assert cache.lookup("task B", env_dir2) is not None
+    hit_b = cache.lookup("task B", env_dir2)
+    assert hit_b is not None
+    assert hit_b["command"] == "echo B"
 
 
 if __name__ == "__main__":
