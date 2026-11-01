@@ -27,11 +27,8 @@ max_seq_length = 2048
 dtype = None  # Auto-detection: Float16 for Tesla T4, Bfloat16 for Ampere+
 load_in_4bit = True  # 4-bit quantization reduces VRAM under 4 GB
 
-# Recommended base models for 4 GB target:
-# 1. "unsloth/Qwen2.5-Coder-3B-Instruct-bnb-4bit"
-# 2. "unsloth/Llama-3.2-3B-Instruct-bnb-4bit"
-# 3. "nvidia/Nemotron-Mini-4B-Instruct" (or community GGUF/HF mirror)
-model_name = "unsloth/Qwen2.5-Coder-3B-Instruct-bnb-4bit"
+# NVIDIA Nemotron 4B Model (Native Unsloth integration)
+model_name = "unsloth/NVIDIA-Nemotron-3-Nano-4B"
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=model_name,
