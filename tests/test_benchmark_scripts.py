@@ -128,3 +128,4 @@ def test_make_figures_generators():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
