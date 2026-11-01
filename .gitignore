@@ -1,0 +1,34 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database & Runtime State
+session.db
+session.db-journal
+*.sqlite3
+
+# Environment Variables
+.env
+!.env.example
+
+# Build & Packaging
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE & OS Files
+.DS_Store
+Thumbs.db
