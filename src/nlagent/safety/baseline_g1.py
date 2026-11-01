@@ -134,3 +134,4 @@ def classify_risk(command: str) -> RiskTier:
         return RiskTier.READ_ONLY
 
     return RiskTier.AMBIGUOUS
+

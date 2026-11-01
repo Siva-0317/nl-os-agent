@@ -1,0 +1,23 @@
+flowchart TD
+    User["User Natural Language Request"] --> S1["1. Reference Resolution & SessionState.render()"]
+    S1 --> S2["2. Layout Assembly (L0 Static, L1 Env, L2 Volatile)"]
+    S2 --> S3{"3. Verified Command Cache Lookup?"}
+    
+    S3 -- "Hit (Cosine >= 0.90)" --> S6["6. Static Effect Analysis (effects.analyse)"]
+    S3 -- "Miss" --> S4["4. Backend LLM Inference (cache_prompt=True)"]
+    S4 --> S5["5. Strict JSON Schema Validation"]
+    S5 --> S6
+    
+    S6 --> S7["7. Risk Tiering (tier_from_effect) & Preview"]
+    S7 --> S8{"8. Tier Policy Gate"}
+    
+    S8 -- "Destructive / Ambiguous / Privileged" --> S9["User Confirmation Prompt with Preview"]
+    S8 -- "Read-Only / State-Modifying" --> S10["Auto-Approved"]
+    
+    S9 -- "Confirmed" --> S11["9. commit(): Re-run effects.analyse (TOCTOU Defense)"]
+    S9 -- "Cancelled" --> Abort["Abort Execution"]
+    S10 --> S11
+    
+    S11 --> S12["10. Shell Execution"]
+    S12 --> S13["11. Update SessionState Entities & Record in VerifiedCache"]
+

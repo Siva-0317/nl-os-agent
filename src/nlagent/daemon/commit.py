@@ -172,3 +172,4 @@ def commit(
             )
 
     return output, exit_code, fresh_effect
+

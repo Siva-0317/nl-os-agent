@@ -63,7 +63,7 @@ def analyse(command: str, cwd: str) -> Effect:
             if tgt:
                 for t in _expand(tgt.strip("'\""), cwd):
                     (e.overwrites if os.path.exists(t) else e.creates).append(t)
-        if cmd in ("rm", "rmdir", "shred", "unlink"):
+        if cmd in ("rm", "rmdir", "shred", "unlink", "truncate"):
             for a in targets:
                 for t in _expand(a, cwd):
                     for w in _walk(t):
@@ -77,6 +77,9 @@ def analyse(command: str, cwd: str) -> Effect:
             for line in r.stdout.splitlines():
                 p = line if os.path.isabs(line) else os.path.join(cwd, line)
                 e.deletes.append(p); e.bytes_affected += _size(p)
+            if not e.deletes:
+                # find with -delete is inherently a destructive operation on root/pattern
+                e.deletes.append(root if os.path.isabs(root) else os.path.join(cwd, root))
         elif cmd in ("mv", "cp") and len(targets) >= 2:
             *srcs, dst = targets
             dst_p = _expand(dst, cwd)[0]
@@ -104,7 +107,7 @@ def analyse(command: str, cwd: str) -> Effect:
         elif cmd == "python" or cmd == "python3" or cmd == "perl" or cmd == "node":
             if "-c" in parts or "-e" in parts:
                 e.opaque = True; e.notes.append("inline interpreter code")
-    allp = e.deletes + e.overwrites + e.perm_changes
+    allp = e.deletes + e.overwrites + e.perm_changes + e.appends + e.creates
     for p in allp:
         norm_p = os.path.normpath(os.path.abspath(p)).replace("\\", "/")
         if norm_p in ("/", "C:/", "D:/") or (len(norm_p) == 3 and norm_p.endswith(":/")):
