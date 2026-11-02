@@ -9,7 +9,31 @@ import os
 import shutil
 import sys
 import tempfile
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        @staticmethod
+        def fixture(func):
+            return func
+
+        class raises:
+            def __init__(self, expected_exc):
+                self.expected_exc = expected_exc
+                self.value = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc} but nothing was raised")
+                if issubclass(exc_type, self.expected_exc):
+                    self.value = exc_val
+                    return True
+                return False
+
+    pytest = _MockPytest()
 
 # Ensure scripts and src are on sys.path
 _root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -21,7 +45,8 @@ for p in (_root, _src, _scripts):
 
 from make_safety_bench import generate_safety_bench
 from run_safety_bench import evaluate_g0, evaluate_g1, evaluate_g2, evaluate_g3, run_benchmark
-from make_figures import generate_table_8_1_safety, generate_table_8_2_e0, generate_table_8_3_latency
+from make_figures import generate_table_8_1_safety, generate_table_8_2_e0, generate_table_8_3_latency, load_jsonl
+from nlagent.bench.provenance import REQUIRED_PROVENANCE_FIELDS, collect, validate_provenance
 
 
 @pytest.fixture
@@ -126,6 +151,82 @@ def test_make_figures_generators():
     assert "Table 8.3" in t8_3
 
 
+def test_provenance_collect_and_validate():
+    meta = collect(model_file="test_model.gguf", backend="mock", seed=123)
+    for field in REQUIRED_PROVENANCE_FIELDS:
+        assert field in meta, f"Missing required provenance field: {field}"
+    assert meta["backend"] == "mock"
+    assert meta["seed"] == 123
+    assert meta["model_file"] == "test_model.gguf"
+    assert validate_provenance(meta) == []
+
+
+def test_provenance_validation_missing_fields():
+    incomplete = {"run_id": "abc123", "timestamp": "2026-01-01T00:00:00"}
+    missing = validate_provenance(incomplete)
+    assert "git_sha" in missing
+    assert "backend" in missing
+    assert "gpu" in missing
+
+
+def test_make_figures_refuses_missing_provenance(temp_dir):
+    bad_file = os.path.join(temp_dir, "bad_records.jsonl")
+    with open(bad_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"command": "ls", "tier": "read_only"}) + "\n")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_jsonl(bad_file, require_provenance=True)
+    assert "PROVENANCE VERIFICATION FAILED" in str(excinfo.value)
+    assert "bad_records.jsonl" in str(excinfo.value)
+
+
+def test_make_figures_accepts_valid_provenance(temp_dir):
+    good_file = os.path.join(temp_dir, "good_records.jsonl")
+    prov = collect(backend="unit_test")
+    record = {"case_id": 1, "command": "pwd", **prov}
+    with open(good_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+    loaded = load_jsonl(good_file, require_provenance=True)
+    assert len(loaded) == 1
+    assert loaded[0]["command"] == "pwd"
+    assert loaded[0]["backend"] == "unit_test"
+
+
+def test_safety_bench_attaches_provenance(temp_dir):
+    dataset_file = os.path.join(temp_dir, "input.jsonl")
+    results_file = os.path.join(temp_dir, "results.jsonl")
+    summary_file = os.path.join(temp_dir, "summary.md")
+
+    with open(dataset_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": 1, "intent": "list", "command": "ls", "family": "benign", "expected_tier": "read_only"}) + "\n")
+
+    run_benchmark(dataset_file, results_file, summary_file)
+    assert os.path.exists(results_file)
+
+    loaded = load_jsonl(results_file, require_provenance=True)
+    assert len(loaded) == 1
+    assert "git_sha" in loaded[0]
+    assert "backend" in loaded[0]
+    assert "run_id" in loaded[0]
+    assert "gpu" in loaded[0]
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    if hasattr(pytest, "main"):
+        pytest.main([__file__, "-v"])
+    else:
+        import inspect
+        for name, func in list(globals().items()):
+            if name.startswith("test_") and callable(func):
+                sig = inspect.signature(func)
+                if len(sig.parameters) == 1:
+                    td = tempfile.mkdtemp()
+                    try:
+                        func(td)
+                    finally:
+                        shutil.rmtree(td, ignore_errors=True)
+                else:
+                    func()
+        print("All benchmark scripts tests passed!")
 

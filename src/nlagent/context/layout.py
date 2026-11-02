@@ -25,6 +25,7 @@ class PromptParts:
     l1_text: str
     l2_text: str
     full_text: str
+    reasoning: bool = True
 
     @property
     def prefix_text(self) -> str:
@@ -79,7 +80,26 @@ def format_l2(state: str, request: str) -> str:
     return "\n".join(parts)
 
 
-def build_prompt(l0: str, l1: dict[str, Any], state: str, request: str) -> PromptParts:
+DEFAULT_FULL_L0 = (
+    "You are an AI-native operating system shell agent.\n"
+    "Convert the user's natural language request into an exact terminal command matching the active environment.\n"
+    "Output ONLY a single valid JSON object with keys 'command', 'targets', and 'clarifying_question'.\n"
+    "Do not include markdown code fences or conversational text outside the JSON schema."
+)
+
+DEFAULT_SHORT_L0 = (
+    "Terminal agent. Output JSON: {\"command\": \"...\", \"targets\": [...], \"clarifying_question\": null}."
+)
+
+
+def build_prompt(
+    l0: str,
+    l1: dict[str, Any],
+    state: str,
+    request: str,
+    reasoning: bool = True,
+    mode: str = "full",
+) -> PromptParts:
     """
     Build a 3-layer cache-aware prompt.
 
@@ -88,11 +108,16 @@ def build_prompt(l0: str, l1: dict[str, Any], state: str, request: str) -> Promp
         l1: Session environment dict (L1, deterministic).
         state: Compact session state block (L2).
         request: Natural language user request (L2).
+        reasoning: When False, disables chain-of-thought thinking via model card mechanism (<think></think>).
+        mode: 'full' (standard complete prompt) or 'short' (condensed prompt under 100 tokens).
 
     Returns:
-        PromptParts with l0_text, l1_text, l2_text, and full_text.
+        PromptParts with l0_text, l1_text, l2_text, full_text, and reasoning flag.
     """
-    l0_text = l0.strip()
+    if mode == "short" and (not l0 or l0 == DEFAULT_FULL_L0):
+        l0_text = DEFAULT_SHORT_L0
+    else:
+        l0_text = l0.strip()
     l1_text = format_l1(l1)
     l2_text = format_l2(state, request)
 
@@ -103,10 +128,15 @@ def build_prompt(l0: str, l1: dict[str, Any], state: str, request: str) -> Promp
 
     full_text = f"{prefix}{l2_text}" if l2_text else prefix.rstrip()
 
+    # Model card instruction: closing <think></think> prefill disables thinking generation
+    if not reasoning and "<think>" not in full_text:
+        full_text = f"{full_text}\n<think></think>"
+
     return PromptParts(
         l0_text=l0_text,
         l1_text=l1_text,
         l2_text=l2_text,
         full_text=full_text,
+        reasoning=reasoning,
     )
 

@@ -6,7 +6,31 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        @staticmethod
+        def fixture(func):
+            return func
+
+        class raises:
+            def __init__(self, expected_exc):
+                self.expected_exc = expected_exc
+                self.value = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc} but nothing was raised")
+                if issubclass(exc_type, self.expected_exc):
+                    self.value = exc_val
+                    return True
+                return False
+
+    pytest = _MockPytest()
 import requests
 
 # Ensure src is on sys.path
@@ -157,6 +181,7 @@ def test_e0_experiment_execution_mocked_equality(tmp_path):
         backend=backend,
         prompts=prompts,
         output_jsonl_path=jsonl_path,
+        allow_mock=True,
     )
 
     assert res["total_prompts"] == 10
@@ -194,6 +219,7 @@ def test_e0_experiment_detects_deliberate_mismatch(tmp_path):
         backend=backend,
         prompts=prompts,
         output_jsonl_path=jsonl_path,
+        allow_mock=True,
     )
 
     assert res["total_prompts"] == 5
@@ -203,6 +229,33 @@ def test_e0_experiment_detects_deliberate_mismatch(tmp_path):
     assert res["gate_passed"] is False
 
 
+def test_e0_refuses_mock_by_default(tmp_path):
+    """Verify run_e0_experiment refuses mock session when allow_mock=False."""
+    mock_session = MagicMock()
+    backend = LlamaServerBackend(session=mock_session)
+    prompts = generate_e0_prompts(count=2)
+    jsonl_path = str(tmp_path / "e0_refuse.jsonl")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_e0_experiment(backend=backend, prompts=prompts, output_jsonl_path=jsonl_path, allow_mock=False)
+    assert "REFUSED" in str(excinfo.value)
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    if hasattr(pytest, "main"):
+        pytest.main([__file__, "-v"])
+    else:
+        import inspect, pathlib, shutil, tempfile
+        for name, func in list(globals().items()):
+            if name.startswith("test_") and callable(func):
+                sig = inspect.signature(func)
+                if len(sig.parameters) == 1:
+                    td = tempfile.mkdtemp()
+                    try:
+                        func(pathlib.Path(td))
+                    finally:
+                        shutil.rmtree(td, ignore_errors=True)
+                else:
+                    func()
+        print("All llama server tests passed!")
 

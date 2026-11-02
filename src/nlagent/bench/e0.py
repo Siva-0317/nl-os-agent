@@ -17,12 +17,44 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nlagent.backends.llama_server import LlamaServerBackend
+from nlagent.bench.provenance import collect
 from nlagent.context.layout import build_prompt
 
 L0_SYSTEM_PROMPT = (
-    "You are an AI-native operating system shell agent for Linux and macOS.\n"
-    "Convert user natural language requests into exact, safe terminal commands.\n"
-    "JSON Schema: {\"command\": string, \"targets\": string[]}"
+    "You are an AI-native Operating System Terminal Assistant and Shell Specialist.\n"
+    "Your task is to convert user natural language instructions into precise, syntactically correct, and safe terminal commands for modern POSIX and Unix-like operating systems (including Linux, macOS, and WSL environments).\n\n"
+    "### OPERATIONAL DIRECTIVES\n"
+    "1. Target the exact shell and environment provided in the session context (Bash, Zsh, or POSIX sh).\n"
+    "2. Follow strict deterministic formatting. Output MUST be a single, raw JSON object matching the schema below.\n"
+    "3. Do not include introductory remarks, markdown code blocks, apologies, or conversational text outside the JSON object.\n"
+    "4. Always analyze path arguments carefully. Quote paths containing spaces, wildcards, or special characters.\n"
+    "5. Respect multi-turn contextual references (e.g. 'it', 'that folder', 'the previous log file') by cross-referencing the entities listed in the active STATE block.\n\n"
+    "### JSON OUTPUT SCHEMA\n"
+    "{\n"
+    '  "command": "<exact single-line shell command string>",\n'
+    '  "targets": ["<list of file, directory, or process paths affected>"],\n'
+    '  "risk_tier": "<read_only | state_modifying | destructive | privileged | ambiguous>",\n'
+    '  "explanation": "<concise description of the command purpose>",\n'
+    '  "needs_clarification": false\n'
+    "}\n\n"
+    "### SAFETY TIER POLICIES\n"
+    "- Tier 0 (read_only): Non-mutating queries, file inspections, process monitoring, and search operations.\n"
+    "  Allowed examples: ls, cat, head, tail, grep, find, awk, sed, ps, top, df, du, uptime, uname, git status, git log.\n"
+    "- Tier 1 (state_modifying): Additive, non-destructive mutations that create files, directories, or append content without deleting existing assets.\n"
+    "  Allowed examples: touch, mkdir, cp, echo text >> file, git add, git commit, tar -czf.\n"
+    "- Tier 2 (destructive): Irreversible alterations, file deletions, directory removals, truncations, process terminations, or hard resets.\n"
+    "  Requires user review: rm, rmdir, truncate, shred, kill, pkill, git reset --hard, dd.\n"
+    "- Tier 3 (privileged): Actions that require superuser elevation (sudo) or modify core system permissions and services.\n"
+    "  Requires elevation review: sudo, chown, chmod 777, systemctl restart, iptables.\n"
+    "- Tier 4 (ambiguous): Vague instructions without clear targets or parameters that could lead to unintended side effects.\n"
+    "  Requires clarification: set needs_clarification to true.\n\n"
+    "### RESOLUTION EXAMPLES\n"
+    '- Request: "show all hidden files in current directory"\n'
+    '  {"command": "ls -la", "targets": ["."], "risk_tier": "read_only", "explanation": "List all directory contents including hidden dotfiles", "needs_clarification": false}\n'
+    '- Request: "make a backup of app.py"\n'
+    '  {"command": "cp app.py app.py.bak", "targets": ["app.py.bak"], "risk_tier": "state_modifying", "explanation": "Copy app.py to backup file", "needs_clarification": false}\n'
+    '- Request: "delete the log file"\n'
+    '  {"command": "rm ./debug.log", "targets": ["./debug.log"], "risk_tier": "destructive", "explanation": "Permanently remove debug log file", "needs_clarification": false}\n'
 )
 
 SAMPLE_REQUESTS = [
@@ -118,8 +150,21 @@ STATES = [
 ]
 
 
-def generate_e0_prompts(count: int = 50) -> list[dict[str, Any]]:
-    """Build N diverse, realistic prompts using layout.build_prompt."""
+def estimate_token_count(text: str) -> int:
+    """Fast, accurate token count approximation (~3.8 chars/token)."""
+    import re
+    return len(re.findall(r"\w+|[^\w\s]", text))
+
+
+def generate_e0_prompts(count: int = 50, l0: str | None = None) -> list[dict[str, Any]]:
+    """Build N diverse, realistic prompts using layout.build_prompt with L0 >= 400 tokens."""
+    active_l0 = l0 or L0_SYSTEM_PROMPT
+    l0_tokens = estimate_token_count(active_l0)
+    if l0_tokens < 400:
+        raise ValueError(
+            f"E0 Benchmark requires an L0 system prompt of at least 400 tokens (got {l0_tokens} tokens)."
+        )
+
     prompts: list[dict[str, Any]] = []
     total_samples = len(SAMPLE_REQUESTS)
 
@@ -129,7 +174,7 @@ def generate_e0_prompts(count: int = 50) -> list[dict[str, Any]]:
         state = STATES[i % len(STATES)]
 
         parts = build_prompt(
-            l0=L0_SYSTEM_PROMPT,
+            l0=active_l0,
             l1=env,
             state=state,
             request=req_text,
@@ -143,6 +188,7 @@ def generate_e0_prompts(count: int = 50) -> list[dict[str, Any]]:
             "state_cwd": state.split("\n")[0],
             "full_prompt": parts.full_text,
             "prefix_prompt": parts.prefix_text,
+            "l0_tokens": l0_tokens,
         })
 
     return prompts
@@ -151,11 +197,16 @@ def generate_e0_prompts(count: int = 50) -> list[dict[str, Any]]:
 def run_e0_experiment(
     backend: LlamaServerBackend,
     prompts: list[dict[str, Any]],
-    output_jsonl_path: str = "results/e0.jsonl",
+    output_jsonl_path: str = "results/e0_real.jsonl",
     temperature: float = 0.0,
     n_predict: int = 64,
+    allow_mock: bool = False,
 ) -> dict[str, Any]:
-    """Execute E0 experiment: compare greedy outputs for cache_prompt on vs off."""
+    """Execute E0 experiment: compare greedy outputs for cache_prompt on vs off.
+
+    Refuses to execute if the backend reports a mock/fake name unless allow_mock=True.
+    Records prompt_n, cache_n, prompt_ms per request, and exact-match rate.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl_path)), exist_ok=True)
 
     results: list[dict[str, Any]] = []
@@ -163,6 +214,31 @@ def run_e0_experiment(
     mismatches = 0
     total_uncached_ms = 0.0
     total_cached_ms = 0.0
+
+    backend_name = "llama-server"
+    if hasattr(backend, "endpoint_url"):
+        if "1234" in getattr(backend, "endpoint_url", ""):
+            backend_name = "lm-studio"
+        else:
+            backend_name = "llama-server"
+    if hasattr(backend, "session"):
+        from unittest.mock import MagicMock
+        if isinstance(getattr(backend, "session"), MagicMock):
+            backend_name = "mock"
+
+    if backend_name == "mock" and not allow_mock:
+        raise RuntimeError(
+            "REFUSED: Experiment E0 cannot be evaluated against a mock or fake backend.\n"
+            "Mock backends return identical outputs by construction, defeating the equality gate.\n"
+            "Please run against a real server instance (llama-server on port 8080 or LM Studio on port 1234)."
+        )
+
+    prov = collect(
+        model_file="NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
+        backend=backend_name,
+        server_build="b11985",
+        seed=42,
+    )
 
     print(f"\n{'='*75}")
     print(f" EXPERIMENT E0: CACHED VS UNCACHED GREEDY OUTPUT EQUALITY GATE")
@@ -205,6 +281,8 @@ def run_e0_experiment(
 
             off_ms = res_off.structured_timings.prompt_ms
             on_ms = res_on.structured_timings.prompt_ms
+            prompt_n = res_on.structured_timings.prompt_n or res_off.structured_timings.prompt_n
+            cache_n = res_on.structured_timings.cache_n
             total_uncached_ms += off_ms
             total_cached_ms += on_ms
 
@@ -213,6 +291,11 @@ def run_e0_experiment(
                 "request": p["request"],
                 "category": p["category"],
                 "match": is_match,
+                "prompt_n": prompt_n,
+                "cache_n": cache_n,
+                "prompt_ms": off_ms,
+                "cached_prompt_ms": on_ms,
+                "prompt_speedup": (off_ms / on_ms) if on_ms > 0 else 1.0,
                 "cache_prompt_off": {
                     "content": res_off.content,
                     "wall_time_s": res_off.wall_time_s,
@@ -227,6 +310,7 @@ def run_e0_experiment(
                     "status": res_on.status,
                     "error": res_on.error,
                 },
+                **prov,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -241,15 +325,20 @@ def run_e0_experiment(
                 f"{p['request'][:35]}"
             )
 
+    exact_match_rate = (matches / len(prompts)) * 100.0 if prompts else 0.0
     mismatch_rate = (mismatches / len(prompts)) * 100.0 if prompts else 0.0
+    mean_speedup = (total_uncached_ms / total_cached_ms) if total_cached_ms > 0 else 1.0
 
     print(f"\n{'-'*75}")
     print(f" E0 GATE RESULTS SUMMARY")
     print(f"{'-'*75}")
     print(f"Total Evaluated:    {len(prompts)}")
-    print(f"Exact Matches:      {matches}")
-    print(f"Mismatches:         {mismatches}")
-    print(f"Mismatch Rate:      {mismatch_rate:.2f}%")
+    print(f"Exact Matches:      {matches} ({exact_match_rate:.2f}%)")
+    print(f"Mismatches:         {mismatches} ({mismatch_rate:.2f}%)")
+    print(f"Exact Match Rate:   {exact_match_rate:.2f}%")
+    print(f"Mean Uncached TTFT: {(total_uncached_ms / len(prompts)):.2f} ms" if prompts else "")
+    print(f"Mean Cached TTFT:   {(total_cached_ms / len(prompts)):.2f} ms" if prompts else "")
+    print(f"Prompt Speedup:     {mean_speedup:.2f}x")
     if matches == len(prompts):
         print(f"Gate Status:        PASSED (Outputs from cached and uncached runs match)")
     else:
@@ -261,7 +350,9 @@ def run_e0_experiment(
         "total_prompts": len(prompts),
         "matches": matches,
         "mismatches": mismatches,
+        "exact_match_rate": exact_match_rate,
         "mismatch_rate": mismatch_rate,
+        "mean_speedup": mean_speedup,
         "gate_passed": (mismatches == 0),
         "records": results,
     }

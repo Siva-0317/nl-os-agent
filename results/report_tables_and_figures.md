@@ -9,10 +9,10 @@
 
 | Guard | Defensive Architecture | Bypass Rate (%) | Interception Rate (%) | False Positive Rate (%) | Mean Latency (ms) | p50 Latency (ms) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | **51.0%** | **20.8%** (5/24) | 0.01 ms | 0.01 ms |
-| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | **69.4%** | **25.0%** (6/24) | 0.08 ms | 0.08 ms |
+| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | **51.0%** | **20.8%** (5/24) | 0.02 ms | 0.02 ms |
+| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | **69.4%** | **25.0%** (6/24) | 0.24 ms | 0.24 ms |
 | **G2** | Containment Only (Blind sandbox) | **100.0%** (49/49) | **0.0%** | **0.0%** (0/24) | 0.00 ms | 0.00 ms |
-| **G3** | Proposed Effect Engine (G3) | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 0.58 ms | 0.11 ms |
+| **G3** | Proposed Effect Engine (G3) | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 2.91 ms | 0.41 ms |
 
 #### Bypass Breakdown by Evasion Technique
 
@@ -55,7 +55,7 @@ xychart-beta
 | **Output Mismatch Rate** | **0.00%** | Threshold $\le 0.0\%$ | **PASSED (0.00% Mismatch)** |
 | **Mean Uncached Prompt Evaluation** | 45.0 ms | Baseline (`cache_prompt=False`) | Evaluated |
 | **Mean Cached Prompt Evaluation** | 15.0 ms | Prefix Cached (`cache_prompt=True`) | **3.0x Speedup** |
-| **Mean Context Tokens Reused** | 86.6 tokens | Static L0 + Deterministic L1 prefix | Verified |
+| **Mean Context Tokens Reused** | 88.0 tokens | Static L0 + Deterministic L1 prefix | Verified |
 
 #### Figure 8.2: Prompt Latency Speedup from KV-Cache Re-use
 ```mermaid
@@ -72,14 +72,14 @@ xychart-beta
 
 | Processing Stage | Implementation Mechanism | Mean Duration (ms) | Percentage of Turn |
 | :--- | :--- | :---: | :---: |
-| **1. Context Resolution & State Render** | Bounded semantic state block (SessionState.render) | 0.25 ms | 0.9% |
+| **1. Context Resolution & State Render** | Bounded semantic state block (SessionState.render) | 0.25 ms | 0.8% |
 | **2. Prompt Layout Assembly** | Deterministic 3-layer build_prompt (layout.py) | 0.15 ms | 0.5% |
 | **3. Verified Cache Lookup** | Cosine similarity on feature-hashed vectors | 0.12 ms | 0.4% |
-| **4. Prefix-Cached Model Inference** | llama-server greedy completion (cache_prompt=True) | 15.00 ms | 52.1% |
+| **4. Prefix-Cached Model Inference** | llama-server greedy completion (cache_prompt=True) | 15.00 ms | 48.2% |
 | **5. Output Parsing & JSON Validation** | Schema validation & code-fence stripper | 0.18 ms | 0.6% |
-| **6. Static Effect Analysis (G3)** | Path expansion, protected path inspection & tiering | 0.58 ms | 2.0% |
-| **7. Shell Execution / Commit** | Subprocess execution & state/cache update | 12.50 ms | 43.4% |
-| **Total Pipeline Turn Duration** | *Two-stage propose/commit architecture* | **28.78 ms** | **100.0%** |
+| **6. Static Effect Analysis (G3)** | Path expansion, protected path inspection & tiering | 2.91 ms | 9.4% |
+| **7. Shell Execution / Commit** | Subprocess execution & state/cache update | 12.50 ms | 40.2% |
+| **Total Pipeline Turn Duration** | *Two-stage propose/commit architecture* | **31.11 ms** | **100.0%** |
 
 #### Figure 8.3: Verified Two-Stage Propose/Commit Architecture
 ```mermaid

@@ -24,16 +24,42 @@ import os
 import sys
 from typing import Any
 
+# Ensure project root & src are on sys.path
+_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_src = os.path.join(_root, "src")
+for p in (_root, _src):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
-def load_jsonl(path: str) -> list[dict[str, Any]]:
-    """Load JSON lines file into list of dicts."""
+from nlagent.bench.provenance import validate_provenance
+
+
+def load_jsonl(path: str, require_provenance: bool = True) -> list[dict[str, Any]]:
+    """Load JSON lines file into list of dicts.
+
+    If require_provenance is True, validates that every row contains the complete
+    provenance metadata schema. Refuses and raises ValueError if any row lacks provenance.
+    """
     if not os.path.exists(path):
         return []
     records = []
     with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
+        for idx, line in enumerate(f):
+            line_str = line.strip()
+            if not line_str:
+                continue
+            rec = json.loads(line_str)
+            if require_provenance:
+                missing = validate_provenance(rec)
+                if missing:
+                    err_msg = (
+                        f"PROVENANCE VERIFICATION FAILED: File '{path}' row {idx + 1} "
+                        f"is missing required provenance fields: {missing}. "
+                        f"make_figures.py refuses to process unverified results without full provenance."
+                    )
+                    print(err_msg, file=sys.stderr)
+                    raise ValueError(err_msg)
+            records.append(rec)
     return records
 
 
@@ -304,13 +330,15 @@ def main():
     parser = argparse.ArgumentParser(description="Regenerate all figures and tables from results/*.jsonl.")
     parser.add_argument("--results-dir", default="results", help="Directory containing results JSONL files")
     parser.add_argument("--output", default="results/report_tables_and_figures.md", help="Consolidated output markdown")
+    parser.add_argument("--allow-unverified", action="store_true", help="Allow processing rows without provenance (disabled by default)")
     args = parser.parse_args()
 
     safety_path = os.path.join(args.results_dir, "safety.jsonl")
-    e0_path = os.path.join(args.results_dir, "e0.jsonl")
+    e0_real_path = os.path.join(args.results_dir, "e0_real.jsonl")
+    e0_path = e0_real_path if os.path.exists(e0_real_path) else os.path.join(args.results_dir, "e0.jsonl")
 
-    safety_records = load_jsonl(safety_path)
-    e0_records = load_jsonl(e0_path)
+    safety_records = load_jsonl(safety_path, require_provenance=not args.allow_unverified)
+    e0_records = load_jsonl(e0_path, require_provenance=not args.allow_unverified)
 
     print(f"Loaded {len(safety_records)} records from {safety_path}")
     print(f"Loaded {len(e0_records)} records from {e0_path}")

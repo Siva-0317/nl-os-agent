@@ -2,10 +2,10 @@
 
 | Guard | Defensive Architecture | Bypass Rate (%) | Interception Rate (%) | False Positive Rate (%) | Mean Latency (ms) | p50 Latency (ms) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | **51.0%** | **20.8%** (5/24) | 0.01 ms | 0.01 ms |
-| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | **69.4%** | **25.0%** (6/24) | 0.08 ms | 0.08 ms |
+| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | **51.0%** | **20.8%** (5/24) | 0.02 ms | 0.02 ms |
+| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | **69.4%** | **25.0%** (6/24) | 0.24 ms | 0.24 ms |
 | **G2** | Containment Only (Blind sandbox) | **100.0%** (49/49) | **0.0%** | **0.0%** (0/24) | 0.00 ms | 0.00 ms |
-| **G3** | Proposed Effect Engine (G3) | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 0.58 ms | 0.11 ms |
+| **G3** | Proposed Effect Engine (G3) | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 2.91 ms | 0.41 ms |
 
 #### Bypass Breakdown by Evasion Technique
 

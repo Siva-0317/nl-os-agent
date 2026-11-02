@@ -8,4 +8,4 @@
 | **Output Mismatch Rate** | **0.00%** | Threshold $\le 0.0\%$ | **PASSED (0.00% Mismatch)** |
 | **Mean Uncached Prompt Evaluation** | 45.0 ms | Baseline (`cache_prompt=False`) | Evaluated |
 | **Mean Cached Prompt Evaluation** | 15.0 ms | Prefix Cached (`cache_prompt=True`) | **3.0x Speedup** |
-| **Mean Context Tokens Reused** | 86.6 tokens | Static L0 + Deterministic L1 prefix | Verified |
+| **Mean Context Tokens Reused** | 88.0 tokens | Static L0 + Deterministic L1 prefix | Verified |

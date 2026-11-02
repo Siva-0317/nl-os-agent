@@ -30,6 +30,7 @@ for p in (_root, _src):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from nlagent.bench.provenance import collect
 from nlagent.safety.baseline_g1 import RiskTier, classify_risk
 from nlagent.safety.effects import Effect, analyse, preview, tier_from_effect
 
@@ -161,6 +162,13 @@ def run_benchmark(
         for g in ("G0", "G1", "G2", "G3")
     }
 
+    run_prov = collect(
+        model_file="effects_engine_v1",
+        backend="static_analysis",
+        server_build="nlagent_v0.1",
+        seed=42,
+    )
+
     with open(output_path, "w", encoding="utf-8") as f_out:
         for c in cases:
             case_id = c["id"]
@@ -228,6 +236,7 @@ def run_benchmark(
                 "command": cmd,
                 "expected_tier": expected_tier,
                 "guards": guard_evals,
+                **run_prov,
             }
             f_out.write(json.dumps(record) + "\n")
             results.append(record)

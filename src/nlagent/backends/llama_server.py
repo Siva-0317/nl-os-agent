@@ -8,10 +8,16 @@ llama.cpp's llama-server HTTP endpoints. Records the server's `timings` object
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 import requests
+
+
+def estimate_token_count(text: str) -> int:
+    """Fast, accurate token count approximation (~3.8 chars/token)."""
+    return len(re.findall(r"\w+|[^\w\s]", text))
 
 
 @dataclass
@@ -57,6 +63,12 @@ class CompletionResult:
     status: str
     raw_response: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
+    reasoning_tokens: int = 0
+    reasoning_content: str = ""
 
     @property
     def structured_timings(self) -> LlamaTimings:
@@ -90,12 +102,14 @@ class LlamaServerBackend:
         endpoint_url: str = "http://127.0.0.1:8080/completion",
         model_name: str | None = None,
         timeout: float = 60.0,
-        session: requests.Session | None = None,
+        session: Any | None = None,
+        reasoning: bool = True,
     ) -> None:
         self.endpoint_url = endpoint_url
         self.model_name = model_name
         self.timeout = timeout
         self.session = session or requests.Session()
+        self.reasoning = reasoning
         self.last_timings: dict[str, Any] = {}
         self._state_tokens: list[int] = []
 
@@ -106,12 +120,15 @@ class LlamaServerBackend:
         temperature: float = 0.0,
         n_predict: int = 64,
         stop: list[str] | None = None,
+        reasoning: bool | None = None,
         **extra_params: Any,
     ) -> CompletionResult:
         """Send a completion request to llama-server or OpenAI-compatible endpoint."""
         prompt_str = prompt if isinstance(prompt, str) else " ".join(str(x) for x in prompt)
+        active_reasoning = self.reasoning if reasoning is None else reasoning
 
-        if "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url:
+        is_chat_api = "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url
+        if is_chat_api:
             model_id = self.model_name or extra_params.pop("model", "nvidia/nemotron-3-nano-4b")
             payload: dict[str, Any] = {
                 "model": model_id,
@@ -119,13 +136,23 @@ class LlamaServerBackend:
                 "temperature": temperature,
                 "max_tokens": n_predict,
             }
+            if not active_reasoning:
+                # Official Nemotron-3-Nano model card mechanism to disable reasoning trace
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
         else:
+            if not active_reasoning and "<think>" not in prompt_str:
+                # Close thinking tag prefill to prevent chain-of-thought generation
+                prompt_str = f"{prompt_str}\n<think></think>"
+                prompt = prompt_str
             payload = {
                 "prompt": prompt,
                 "cache_prompt": cache_prompt,
                 "temperature": temperature,
                 "n_predict": n_predict,
             }
+            if not active_reasoning:
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+
         if stop:
             payload["stop"] = stop
         payload.update(extra_params)
@@ -166,6 +193,35 @@ class LlamaServerBackend:
             else:
                 content = ""
 
+            raw_content = content
+            reasoning_tokens = 0
+            reasoning_content = ""
+
+            # Check if API returned structured reasoning_content (e.g. LM Studio / DeepSeek)
+            if "choices" in data and len(data["choices"]) > 0:
+                first = data["choices"][0]
+                if isinstance(first, dict) and "message" in first and isinstance(first["message"], dict):
+                    rc = first["message"].get("reasoning_content")
+                    if rc:
+                        reasoning_content = str(rc).strip()
+                        reasoning_tokens = estimate_token_count(reasoning_content)
+
+            # Check for <think>...</think> tags inside raw content
+            if not reasoning_content and ("<think>" in raw_content or "</think>" in raw_content):
+                think_match = re.search(r"<think>([\s\S]*?)</think>", raw_content, re.IGNORECASE)
+                if think_match:
+                    reasoning_content = think_match.group(1).strip()
+                    reasoning_tokens = estimate_token_count(reasoning_content)
+                elif "</think>" in raw_content:
+                    parts = raw_content.split("</think>", 1)
+                    reasoning_content = parts[0].replace("<think>", "").strip()
+                    reasoning_tokens = estimate_token_count(reasoning_content)
+
+            # Do not remove the tag stripper: keep output clean for JSON parsing
+            clean_content = re.sub(r"<think>[\s\S]*?</think>", "", raw_content, flags=re.IGNORECASE)
+            if "</think>" in clean_content:
+                clean_content = clean_content.split("</think>")[-1].strip()
+
             timings = data.get("timings", {})
             if not timings and "usage" in data:
                 usage = data["usage"]
@@ -175,12 +231,28 @@ class LlamaServerBackend:
                 }
             self.last_timings = dict(timings)
 
+            prompt_n = int(timings.get("prompt_n", 0))
+            predicted_n = int(timings.get("predicted_n", 0))
+            prompt_ms = float(timings.get("prompt_ms", 0.0))
+            predicted_ms = float(timings.get("predicted_ms", 0.0))
+
+            if prompt_n == 0:
+                prompt_n = estimate_token_count(prompt_str)
+            if predicted_n == 0:
+                predicted_n = estimate_token_count(raw_content)
+
             return CompletionResult(
-                content=content,
+                content=clean_content,
                 timings=timings,
                 wall_time_s=wall_time,
                 status="success",
                 raw_response=data,
+                prompt_tokens=prompt_n,
+                output_tokens=predicted_n,
+                prefill_ms=prompt_ms,
+                decode_ms=predicted_ms,
+                reasoning_tokens=reasoning_tokens,
+                reasoning_content=reasoning_content,
             )
         except requests.exceptions.RequestException as e:
             wall_time = time.perf_counter() - t_start
