@@ -17,6 +17,15 @@ function global:nlctl {
     python "D:\Final yr Proj\src\nlagent\cli\main.py" @args
 }
 
+# Define global eval helper for PowerShell so bash-style eval wrappers execute cleanly
+function global:eval {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$cmdArgs)
+    $cmdStr = $cmdArgs -join " "
+    if (-not [string]::IsNullOrWhiteSpace($cmdStr)) {
+        Invoke-Expression $cmdStr
+    }
+}
+
 if (Get-Module -Name PSReadLine) {
     $nlProposeAction = {
         $line = $null
@@ -28,13 +37,18 @@ if (Get-Module -Name PSReadLine) {
         }
 
         # Run nlctl propose with --emit-shell
-        # Stderr (colored preview) renders directly; stdout returns commit eval command
+        # Stderr (colored preview) renders directly; stdout returns commit command
         $evalCmd = & nlctl propose "$line" --emit-shell 2>&1 | Where-Object { $_ -is [string] }
 
         # Extract stdout string
         $proposedAction = ($evalCmd | Out-String).Trim()
 
         if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($proposedAction)) {
+            # Convert bash-style eval "$(nlctl commit <id> --emit-shell)" to native PowerShell "nlctl commit <id>"
+            if ($proposedAction -match 'nlctl commit (p_[a-zA-Z0-9_]+)') {
+                $propId = $Matches[1]
+                $proposedAction = "nlctl commit $propId"
+            }
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $proposedAction)
         }
     }

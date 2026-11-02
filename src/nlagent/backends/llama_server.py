@@ -75,6 +75,26 @@ class CompletionResult:
         return LlamaTimings.from_dict(self.timings)
 
 
+def get_preferred_model_id(models_endpoint: str = "http://127.0.0.1:1234/v1/models") -> str | None:
+    """Probe LM Studio / local server models list and prioritize fine-tuned / dense models."""
+    try:
+        r = requests.get(models_endpoint, timeout=0.5)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            ids = [m.get("id", "") for m in data if isinstance(m, dict)]
+            # 1. First priority: look for fine-tuned or dense model
+            for mid in ids:
+                mid_lower = mid.lower()
+                if "finetun" in mid_lower or "dense" in mid_lower:
+                    return mid
+            # 2. Second priority: first active model
+            if ids:
+                return ids[0]
+    except Exception:
+        pass
+    return None
+
+
 def resolve_local_endpoint(endpoint_url: str = "http://127.0.0.1:8080/completion") -> str:
     """Probe 8080 (llama-server) and 1234 (LM Studio) to auto-select active local server."""
     if endpoint_url != "http://127.0.0.1:8080/completion":
@@ -129,7 +149,10 @@ class LlamaServerBackend:
 
         is_chat_api = "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url
         if is_chat_api:
-            model_id = self.model_name or extra_params.pop("model", "nvidia/nemotron-3-nano-4b")
+            model_id = self.model_name or extra_params.pop("model", None)
+            if not model_id:
+                models_url = self.endpoint_url.replace("/chat/completions", "/models")
+                model_id = get_preferred_model_id(models_url) or "nvidia/nemotron-3-nano-4b"
             payload: dict[str, Any] = {
                 "model": model_id,
                 "messages": [{"role": "user", "content": prompt_str}],
