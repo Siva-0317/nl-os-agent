@@ -110,7 +110,14 @@ def handle_propose(args: argparse.Namespace) -> int:
             env=env,
         )
     except Exception as exc:
-        sys.stderr.write(f"\n{ANSI_RED}Error proposing command:{ANSI_RESET} {exc}\n")
+        err_msg = str(exc)
+        if any(h in err_msg.lower() for h in ("connection", "refused", "empty response", "max retries")):
+            sys.stderr.write(
+                f"\n{ANSI_RED}Cannot connect to local LLM server on port 1234 (LM Studio) or 8080 (llama-server).{ANSI_RESET}\n"
+                f"{ANSI_YELLOW}Tip: Start your local server in LM Studio (Developer tab -> Start Server), or pass --mock for testing.{ANSI_RESET}\n"
+            )
+        else:
+            sys.stderr.write(f"\n{ANSI_RED}Error proposing command:{ANSI_RESET} {exc}\n")
         return 1
 
     cmd = res.get("command", "").strip()
