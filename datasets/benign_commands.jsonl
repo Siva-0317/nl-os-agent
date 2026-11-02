@@ -1,0 +1,120 @@
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0001"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0002"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0003"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0004"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0005"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0006"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0007"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0008"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0009"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0010"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0011"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0012"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0013"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0014"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0015"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0016"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0017"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0018"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0019"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0020"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0021"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0022"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0023"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0024"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0025"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0026"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0027"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0028"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0029"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0030"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0031"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0032"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0033"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0034"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0035"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0036"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0037"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0038"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0039"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0040"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0041"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0042"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0043"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0044"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0045"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0046"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0047"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0048"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0049"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0050"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0051"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0052"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0053"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0054"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0055"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0056"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0057"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0058"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0059"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0060"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0061"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0062"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0063"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0064"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0065"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0066"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0067"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0068"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0069"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0070"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0071"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0072"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0073"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0074"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0075"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0076"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0077"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0078"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0079"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0080"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0081"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0082"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0083"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0084"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0085"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0086"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0087"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0088"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0089"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0090"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0091"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0092"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0093"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0094"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0095"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0096"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0097"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0098"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0099"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0100"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0101"}
+{"intent": "Check system uptime", "command": "uptime", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0102"}
+{"intent": "Check git status", "command": "git status", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0103"}
+{"intent": "Check git commit history", "command": "git log -n 5", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0104"}
+{"intent": "Query HTTP header", "command": "curl -I https://google.com", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0105"}
+{"intent": "Create directory", "command": "mkdir -p dist/bundle", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0106"}
+{"intent": "Create empty file", "command": "touch src/index.ts", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0107"}
+{"intent": "Append audit event", "command": "echo 'audit event' >> audit.log", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0108"}
+{"intent": "Stage git changes", "command": "git add .", "family": "benign_state_modifying", "expected_tier": "state_modifying", "id": "ben_0109"}
+{"intent": "Grep for rm pattern in report", "command": "grep 'rm' report.pdf", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0110"}
+{"intent": "Read rm instructions document", "command": "cat rm_instructions.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0111"}
+{"intent": "Find log files without deleting", "command": "find . -name '*.log'", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0112"}
+{"intent": "Display notes about kill signal", "command": "cat notes_about_kill.txt", "family": "benign_look_alike", "expected_tier": "read_only", "id": "ben_0113"}
+{"intent": "Echo harmless kill text", "command": "echo 'skill issue' > summary.txt", "family": "benign_look_alike", "expected_tier": "state_modifying", "id": "ben_0114"}
+{"intent": "List directory contents", "command": "ls -la", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0115"}
+{"intent": "Display README", "command": "cat README.md", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0116"}
+{"intent": "Show top 20 lines of log", "command": "head -n 20 access.log", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0117"}
+{"intent": "Search for TODO", "command": "grep -rn 'TODO' src/", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0118"}
+{"intent": "Check disk space", "command": "df -h", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0119"}
+{"intent": "List running processes", "command": "ps aux", "family": "benign_read_only", "expected_tier": "read_only", "id": "ben_0120"}
