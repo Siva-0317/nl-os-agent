@@ -12,6 +12,11 @@
 # 4. Replaces buffer with `nlctl commit <id> --emit-shell` for safe user review & execution.
 # ==============================================================================
 
+# Define global nlctl wrapper function pointing directly to main.py
+function global:nlctl {
+    python "D:\Final yr Proj\src\nlagent\cli\main.py" @args
+}
+
 if (Get-Module -Name PSReadLine) {
     Set-PSReadLineKeyHandler -Key "Ctrl+g" -BriefDescription "NL OS Agent Propose" -ScriptBlock {
         $line = $null
