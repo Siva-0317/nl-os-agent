@@ -17,28 +17,66 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any, Callable
+from pathlib import Path
 
 from nlagent.cache.verified_cache import VerifiedCommandCache, make_env_key
 from nlagent.context.state import SessionState
 from nlagent.daemon.propose import get_default_env
 from nlagent.safety.effects import Effect, analyse, preview, tier_from_effect
+from nlagent.safety.quarantine import QuarantineLimitExceededError, quarantine_effect
+
+
+_bash_available: bool | None = None
 
 
 def get_preferred_shell() -> str | None:
-    """Detect if bash (Git Bash on Windows or native bash) is available."""
+    """Detect if bash (Git Bash on Windows or native bash) is available and functional."""
+    global _bash_available
+    if _bash_available is False:
+        return None
+
     if sys.platform != "win32":
         return shutil.which("bash") or shutil.which("sh")
+
+    if _bash_available is True:
+        candidates = [
+            "C:\\Program Files\\Git\\bin\\bash.exe",
+            "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return shutil.which("bash")
 
     git_bash_candidates = [
         "C:\\Program Files\\Git\\bin\\bash.exe",
         "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
     ]
-    for candidate in git_bash_candidates:
-        if os.path.exists(candidate):
-            return candidate
+    candidate = None
+    for c in git_bash_candidates:
+        if os.path.exists(c):
+            candidate = c
+            break
+    if not candidate:
+        candidate = shutil.which("bash")
 
-    return shutil.which("bash")
+    if not candidate:
+        _bash_available = False
+        return None
+
+    # Test if bash actually executes without MSYS2 sandbox fatal error (0xC0000022)
+    try:
+        proc = subprocess.run([candidate, "-c", "exit 0"], capture_output=True, timeout=3)
+        if proc.returncode == 0:
+            _bash_available = True
+            return candidate
+    except Exception:
+        pass
+
+    _bash_available = False
+    return None
 
 
 def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
@@ -58,14 +96,109 @@ def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
                 timeout=45,
             )
         else:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=cwd,
-                timeout=45,
-            )
+            # On Windows without functional bash, handle common POSIX file operations or fallback to cmd/powershell
+            if sys.platform == "win32":
+                stripped = command.strip()
+                # Emulate basic POSIX rm on Windows if cmd.exe wouldn't recognize it
+                if stripped.startswith("rm ") or stripped == "rm":
+                    import glob
+                    parts = shlex.split(stripped)
+                    targets = [p for p in parts[1:] if not p.startswith("-")]
+                    deleted_count = 0
+                    for t in targets:
+                        target_path = Path(cwd) / t if not os.path.isabs(t) else Path(t)
+                        pattern = str(target_path)
+                        matches = glob.glob(pattern) if any(ch in pattern for ch in "*?[]") else ([str(target_path)] if target_path.exists() else [])
+                        for m in matches:
+                            mp = Path(m)
+                            if mp.is_dir():
+                                shutil.rmtree(mp, ignore_errors=True)
+                                deleted_count += 1
+                            elif mp.exists():
+                                mp.unlink(missing_ok=True)
+                                deleted_count += 1
+                    return f"Removed {deleted_count} items." if deleted_count > 0 else "", 0
+
+                # Also emulate basic touch
+                if stripped.startswith("touch "):
+                    parts = shlex.split(stripped)
+                    for t in parts[1:]:
+                        if not t.startswith("-"):
+                            tp = Path(cwd) / t if not os.path.isabs(t) else Path(t)
+                            tp.touch(exist_ok=True)
+                    return "", 0
+
+                # Emulate basic POSIX find on Windows (avoiding C:\Windows\System32\find.exe conflict)
+                if stripped.startswith("find "):
+                    import fnmatch
+                    parts = shlex.split(stripped)
+                    root = "."
+                    pattern = "*"
+                    is_delete = "-delete" in parts
+                    skip_next = False
+                    for i in range(1, len(parts)):
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        p = parts[i]
+                        if p == "-name" and i + 1 < len(parts):
+                            pattern = parts[i + 1]
+                            skip_next = True
+                        elif p == "-delete":
+                            is_delete = True
+                        elif not p.startswith("-"):
+                            root = p
+
+                    matches = []
+                    target_root = Path(cwd) / root if not os.path.isabs(root) else Path(root)
+                    if target_root.exists():
+                        if target_root.is_dir():
+                            for r, _, fnames in os.walk(target_root):
+                                for fn in fnames:
+                                    if fnmatch.fnmatch(fn, pattern):
+                                        matches.append(os.path.join(r, fn))
+                        elif fnmatch.fnmatch(target_root.name, pattern):
+                            matches.append(str(target_root))
+
+                    if is_delete:
+                        deleted = 0
+                        for m in matches:
+                            try:
+                                Path(m).unlink(missing_ok=True)
+                                deleted += 1
+                            except OSError:
+                                pass
+                        return f"Deleted {deleted} items." if deleted > 0 else "", 0
+                    else:
+                        rel_matches = [os.path.relpath(m, cwd).replace("\\", "/") for m in matches]
+                        return "\n".join(rel_matches), 0
+
+                # Try PowerShell first, fallback to cmd.exe shell=True
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                    capture_output=True,
+                    text=True,
+                    cwd=cwd,
+                    timeout=45,
+                )
+                if proc.returncode != 0:
+                    proc = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        cwd=cwd,
+                        timeout=45,
+                    )
+            else:
+                proc = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=cwd,
+                    timeout=45,
+                )
 
         output = (proc.stdout or "").strip()
         if not output and proc.stderr:
@@ -85,6 +218,10 @@ def commit(
     verified_cache: VerifiedCommandCache | None = None,
     runner: Callable[[str, str], tuple[str, int]] | None = None,
     allow_privileged: bool = False,
+    allow_tier_escalation: bool = False,
+    enable_quarantine: bool = True,
+    confirmed_large_quarantine: bool = False,
+    quarantine_base_dir: str | Path | None = None,
     env: dict[str, Any] | None = None,
 ) -> tuple[str, int, Effect]:
     """
@@ -93,12 +230,14 @@ def commit(
     Steps:
     1. Re-run effects.analyse(command, session_state.cwd) immediately before running.
     2. Enforce safety invariants: block privileged actions unless explicitly allowed.
-    3. Execute the command.
-    4. On exit code 0:
+    3. Enforce TOCTOU invariants: block execution if risk tier escalated from proposal time.
+    4. Pre-execution Quarantine: shadow all files scheduled for deletion or overwrite.
+    5. Execute the command.
+    6. On exit code 0:
        - Update session_state with new command effect and entities.
        - If directory changed, update session_state.cwd.
        - Cache successful proposal in verified_cache.
-    5. Return (output, exit_code, fresh_effect).
+    7. Return (output, exit_code, fresh_effect).
     """
     command = str(proposal.get("command", "")).strip()
     if not command:
@@ -116,7 +255,41 @@ def commit(
         )
         return err_msg, 126, fresh_effect
 
-    # 3. Execute
+    # 3. Block execution if risk tier escalated from proposal time (TOCTOU race protection)
+    proposed_tier = proposal.get("tier")
+    tier_order = {"read_only": 0, "state_modifying": 1, "ambiguous": 2, "destructive": 3, "privileged": 4}
+    if (
+        proposed_tier
+        and not allow_tier_escalation
+        and tier_order.get(fresh_tier, 0) > tier_order.get(proposed_tier, 0)
+    ):
+        err_msg = (
+            f"Blocked: TOCTOU state mutation detected! "
+            f"Risk tier escalated from '{proposed_tier}' at proposal time to '{fresh_tier}' at commit time.\n"
+            f"{preview(fresh_effect)}"
+        )
+        return err_msg, 126, fresh_effect
+
+    # 4. Pre-execution Quarantine: shadow items before destructive mutation
+    if enable_quarantine and (fresh_effect.deletes or fresh_effect.overwrites):
+        req_id = str(proposal.get("request_id") or proposal.get("id") or f"req_{int(time.time() * 1000)}")
+        try:
+            quarantine_manifest = quarantine_effect(
+                effect=fresh_effect,
+                request_id=req_id,
+                command=command,
+                base_dir=quarantine_base_dir,
+                confirmed_large=confirmed_large_quarantine,
+            )
+            proposal["quarantine_id"] = req_id
+        except QuarantineLimitExceededError as qe:
+            err_msg = (
+                f"Blocked: {qe}\n"
+                f"Destructive action requires explicit confirmation to proceed without undo."
+            )
+            return err_msg, 126, fresh_effect
+
+    # 5. Execute
     exec_fn = runner if runner is not None else default_shell_runner
     output, exit_code = exec_fn(command, session_state.cwd)
 

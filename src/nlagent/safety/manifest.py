@@ -7,7 +7,10 @@ def manifest(root):
             p = os.path.join(dp, n)
             try:
                 st = os.lstat(p)
-                h = hashlib.sha1(open(p, "rb").read()).hexdigest() if os.path.isfile(p) and not os.path.islink(p) else ""
+                h = ""
+                if os.path.isfile(p) and not os.path.islink(p):
+                    with open(p, "rb") as f:
+                        h = hashlib.sha1(f.read()).hexdigest()
                 m[os.path.relpath(p, root)] = (st.st_size, h, oct(st.st_mode & 0o777))
             except OSError:
                 pass
