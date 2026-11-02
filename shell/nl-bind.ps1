@@ -18,7 +18,7 @@ function global:nlctl {
 }
 
 if (Get-Module -Name PSReadLine) {
-    Set-PSReadLineKeyHandler -Key "Ctrl+g" -BriefDescription "NL OS Agent Propose" -ScriptBlock {
+    $nlProposeAction = {
         $line = $null
         $cursor = $null
         [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
@@ -38,5 +38,11 @@ if (Get-Module -Name PSReadLine) {
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $proposedAction)
         }
     }
+
+    # Bind Ctrl+G (for standalone PowerShell / Windows Terminal)
+    Set-PSReadLineKeyHandler -Key "Ctrl+g" -BriefDescription "NL OS Agent Propose" -ScriptBlock $nlProposeAction
+
+    # Bind Alt+G (for VS Code integrated terminal, avoiding VS Code's Ctrl+G conflict)
+    Set-PSReadLineKeyHandler -Key "Alt+g" -BriefDescription "NL OS Agent Propose (VS Code friendly)" -ScriptBlock $nlProposeAction
 }
 
