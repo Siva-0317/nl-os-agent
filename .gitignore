@@ -18,6 +18,8 @@ htmlcov/
 session.db
 session.db-journal
 *.sqlite3
+*.db
+*.db-journal
 
 # Environment Variables
 .env

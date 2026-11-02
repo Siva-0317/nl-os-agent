@@ -161,23 +161,47 @@ Generated via `scripts/make_finetune_dataset.py`:
 - **LoRA Hyperparameters**:
   - Rank $r = 16$, $\alpha = 16$, dropout $= 0$
   - Targets: `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]`
+  - Trainable parameters: **10,119,168 of 3,983,676,000 (0.25% trained)**
 - **Memory Fix for Mamba-2 Hybrid Architecture**:
   - *Initial Error Encountered*: Without compiled `mamba_ssm` CUDA kernels, PyTorch's reference chunk scan attempted to allocate 12 GiB at `batch_size=4` and `seq_len=2048`, hitting an OutOfMemoryError.
   - *Solution Applied*: Set `max_seq_length = 512` (shell command inputs and JSON outputs are $<200$ tokens), `per_device_train_batch_size = 1`, `gradient_accumulation_steps = 16` (preserving effective batch size 16), and `PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"`.
-  - *Result*: Memory footprint dropped to $< 2\text{ GB}$, running smoothly on Tesla T4.
-- **Current Status**: **Smoke test (30 steps) is executing in Colab**.
+  - *Result*: VRAM usage dropped to $< 2\text{ GB}$, running smoothly on Tesla T4.
+
+### C. Smoke Test Empirical Results (COMPLETED & VERIFIED)
+- **Tokenization**: 7,200 examples tokenized in 4 seconds (2,174.5 examples/s).
+- **Execution**: 30 steps completed successfully in 58:34 on Colab Tesla T4 (`checkpoint-30` saved).
+- **Loss Convergence Curve**:
+  | Step | Training Loss | Convergence Trend |
+  | :---: | :---: | :--- |
+  | **5** | 3.2144 | Initial formatting adaptation |
+  | **10** | 2.7193 | -15.4% drop |
+  | **15** | 1.8800 | -30.9% drop |
+  | **20** | 1.2542 | -33.3% drop |
+  | **25** | 0.9349 | Sub-1.0 threshold achieved |
+  | **30** | **0.8054** | **-75.0% total loss reduction in 30 steps** |
+- **Takeaway**: Smooth, steady convergence with zero NaN or gradient exploding spikes. The learning rate ($2\times 10^{-4}$) and gradient accumulation (effective batch size 16) are stable.
 
 ---
 
 ## 5. Next Steps for Planning with Claude
 
-Once the Colab smoke test completes:
+With the smoke test verified and `checkpoint-30` saved:
 
-1. **Complete Full Training Run**:
-   - Transition from the 30-step smoke test to the full training run (~1,000 steps, ~1.5 epochs over the 7,200 dataset, ~35 minutes on T4).
-   - Track training loss convergence (target: drop from ~2.2 down to ~0.4–0.6).
+1. **Full Training Run Sizing**:
+   - Because Nemotron uses PyTorch reference scan without native C++ `mamba_ssm` kernels on Colab, throughput is ~7.3 seconds per sample (effective batch of 16).
+   - Rather than 1,000 steps (which would take ~30 hours on reference scan), **100 to 200 steps** will train 1,600 to 3,200 micro-batches and drive loss below $\sim 0.45$ in approximately **3 to 4 hours**, well within a single Colab free session limit.
 2. **Export to GGUF (`Q4_K_M`)**:
    - Run `model.save_pretrained_gguf("nl_agent_distilled_q4km", tokenizer, quantization_method="q4_k_m")`.
+   - Download the `.gguf` file to the local machine (`D:\AI\lmstudio-community\`).
+3. **Local Deployment & Validation**:
+   - Load the fine-tuned `.gguf` into LM Studio via `lms load`.
+   - Run `python agent.py` to test zero-shot JSON compliance and cross-shell command synthesis.
+4. **Evaluate Experiment E5 (Context Distillation Accuracy)**:
+   - Compare translation accuracy and schema adherence between the **Base Nemotron model** vs. the **Fine-Tuned Distilled model**.
+5. **Terminal Shell Hook Integration (Demo Track)**:
+   - Test the `Ctrl+G` keybinding in native Bash / PowerShell using `src/nlagent/cli/quick_propose.py`.
+6. **Report Compilation**:
+   - Insert regenerated numbers from `results/report_tables_and_figures.md` directly into the final project report chapters.
    - Download the `.gguf` file to the local machine (`D:\AI\lmstudio-community\`).
 3. **Local Deployment & Validation**:
    - Load the fine-tuned `.gguf` into LM Studio via `lms load`.
@@ -188,3 +212,4 @@ Once the Colab smoke test completes:
    - Test the `Ctrl+G` keybinding in native Bash / PowerShell using `src/nlagent/cli/quick_propose.py`.
 6. **Report Compilation**:
    - Insert regenerated numbers from `results/report_tables_and_figures.md` directly into the final project report chapters.
+

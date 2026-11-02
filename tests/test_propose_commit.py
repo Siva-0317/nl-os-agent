@@ -9,7 +9,32 @@ import shutil
 import sys
 import tempfile
 from unittest.mock import MagicMock
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        @staticmethod
+        def fixture(func):
+            return func
+
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+                self.value = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc} but nothing was raised")
+                if issubclass(exc_type, self.expected_exc):
+                    self.value = exc_val
+                    return True
+                return False
+
+    pytest = _MockPytest()
 
 # Ensure src is on sys.path
 _src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -231,5 +256,20 @@ def test_baseline_g1_classify_risk_is_independent():
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    if hasattr(pytest, "main"):
+        pytest.main([__file__, "-v"])
+    else:
+        import inspect
+        for name, func in list(globals().items()):
+            if name.startswith("test_") and callable(func):
+                sig = inspect.signature(func)
+                if len(sig.parameters) == 1:
+                    td = tempfile.mkdtemp()
+                    try:
+                        func(td)
+                    finally:
+                        shutil.rmtree(td, ignore_errors=True)
+                else:
+                    func()
+        print("All propose/commit tests passed!")
 

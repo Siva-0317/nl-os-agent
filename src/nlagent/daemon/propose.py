@@ -113,11 +113,21 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
             f"Model proposal must be a JSON object, got {type(parsed).__name__}."
         )
 
-    if "command" not in parsed:
-        raise ValueError(f"Model proposal missing required 'command' field: {parsed}")
+    clarifying_q = parsed.get("clarifying_question") or parsed.get("question")
+    needs_clarification = parsed.get("needs_clarification", False) or bool(clarifying_q)
 
-    command_val = parsed["command"]
-    if not isinstance(command_val, str) or not command_val.strip():
+    if "command" not in parsed:
+        if clarifying_q or needs_clarification:
+            command_val = ""
+        else:
+            raise ValueError(f"Model proposal missing required 'command' field: {parsed}")
+    else:
+        command_val = parsed["command"]
+
+    if not isinstance(command_val, str):
+        command_val = str(command_val) if command_val is not None else ""
+
+    if not command_val.strip() and not (clarifying_q or needs_clarification):
         raise ValueError(f"'command' field must be a non-empty string, got: {command_val!r}")
 
     targets = parsed.get("targets", [])
@@ -126,11 +136,18 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
     elif not isinstance(targets, list):
         targets = []
 
-    return {
+    res: dict[str, Any] = {
         "command": command_val.strip(),
         "targets": [str(t) for t in targets],
         "explanation": str(parsed.get("explanation", "")).strip(),
     }
+    if clarifying_q:
+        res["clarifying_question"] = str(clarifying_q).strip()
+        res["needs_clarification"] = True
+    elif needs_clarification:
+        res["needs_clarification"] = True
+
+    return res
 
 
 def propose(
@@ -142,6 +159,8 @@ def propose(
     system_prompt: str | None = None,
     temperature: float = 0.0,
     n_predict: int = 256,
+    reasoning: bool = True,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     """
     Safe command proposal pipeline.
@@ -165,6 +184,11 @@ def propose(
     resolved_request = session_state.resolve_reference(request.strip())
     rendered_state = session_state.render()
 
+    # Resolve configuration overrides if provided
+    active_reasoning = getattr(config, "reasoning", reasoning) if config is not None else reasoning
+    active_temperature = getattr(config, "temperature", temperature) if config is not None else temperature
+    active_n_predict = getattr(config, "n_predict", n_predict) if config is not None else n_predict
+
     # 2. Build deterministic L1 and 3-layer prompt
     active_env = env if env is not None else get_default_env(cwd=session_state.cwd)
     l0 = system_prompt if system_prompt is not None else DEFAULT_L0_SYSTEM_PROMPT
@@ -174,11 +198,14 @@ def propose(
         l1=active_env,
         state=rendered_state,
         request=resolved_request,
+        reasoning=active_reasoning,
     )
 
     # 3. Check verified cache
     cached_proposal: dict[str, Any] | None = None
     is_cached = False
+    clarifying_question: str | None = None
+    needs_clarification: bool = False
 
     if verified_cache is not None:
         env_key = make_env_key(
@@ -198,14 +225,15 @@ def propose(
         # Backend execution
         if backend is None:
             from nlagent.backends.llama_server import LlamaServerBackend
-            backend = LlamaServerBackend()
+            backend = LlamaServerBackend(reasoning=active_reasoning)
 
         if hasattr(backend, "complete"):
             res = backend.complete(
                 prompt=prompt_parts.full_text,
                 cache_prompt=True,
-                temperature=temperature,
-                n_predict=n_predict,
+                temperature=active_temperature,
+                n_predict=active_n_predict,
+                reasoning=active_reasoning,
             )
             raw_output = res.content if hasattr(res, "content") else str(res)
         elif callable(backend):
@@ -218,13 +246,22 @@ def propose(
         command = parsed["command"]
         targets = parsed["targets"]
         explanation = parsed["explanation"]
+        clarifying_question = parsed.get("clarifying_question")
+        needs_clarification = parsed.get("needs_clarification", False)
 
     # 4. Static effect analysis (mandatory for both fresh and cached proposals)
-    eff: Effect = analyse(command=command, cwd=session_state.cwd)
-
-    # 5. Risk tier and preview
-    tier = tier_from_effect(eff)
-    preview_text = preview(eff)
+    if command:
+        eff: Effect = analyse(command=command, cwd=session_state.cwd)
+        tier = "ambiguous" if needs_clarification else tier_from_effect(eff)
+        preview_text = preview(eff)
+    else:
+        eff = Effect()
+        tier = "ambiguous"
+        preview_text = (
+            f"Clarification required: {clarifying_question}"
+            if clarifying_question
+            else "Ambiguous request: clarification required before execution."
+        )
 
     return {
         "command": command,
@@ -236,5 +273,7 @@ def propose(
         "effect": eff,
         "request": resolved_request,
         "raw_output": raw_output,
+        "clarifying_question": clarifying_question,
+        "needs_clarification": bool(clarifying_question or needs_clarification),
     }
 
