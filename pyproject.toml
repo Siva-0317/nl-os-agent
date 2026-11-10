@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 nlctl = "nlagent.cli.main:main"
+nlagent = "nlagent.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

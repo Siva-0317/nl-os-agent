@@ -30,8 +30,9 @@ _src = os.path.join(_root, "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from nlagent.backends.llama_server import LlamaServerBackend
+from nlagent.backends.llama_server import LlamaServerBackend, resolve_local_endpoint
 from nlagent.cache.verified_cache import VerifiedCommandCache
+from nlagent.config import AgentConfig
 from nlagent.context.state import SessionState
 from nlagent.daemon.commit import commit
 from nlagent.daemon.propose import get_default_env, propose
@@ -95,22 +96,7 @@ def display_entities(session: SessionState) -> None:
 
 def resolve_endpoint(requested: str) -> str:
     """Probe 8080 (llama-server) and 1234 (LM Studio) to auto-select active local server."""
-    if requested != "http://127.0.0.1:8080/completion":
-        return requested
-    import requests
-    try:
-        r = requests.get("http://127.0.0.1:8080/health", timeout=0.3)
-        if r.status_code == 200:
-            return requested
-    except Exception:
-        pass
-    try:
-        r = requests.get("http://127.0.0.1:1234/v1/models", timeout=0.3)
-        if r.status_code == 200:
-            return "http://127.0.0.1:1234/v1/chat/completions"
-    except Exception:
-        pass
-    return requested
+    return resolve_local_endpoint(requested)
 
 
 def main():
@@ -136,10 +122,15 @@ def main():
     console.print(BANNER, style="bold cyan")
 
     # Initialize runtime components
+    agent_cfg = AgentConfig.from_env()
     session = SessionState(cwd=args.cwd)
     verified_cache = VerifiedCommandCache(threshold=args.cache_threshold)
     active_endpoint = resolve_endpoint(args.endpoint)
-    backend = LlamaServerBackend(endpoint_url=active_endpoint)
+    backend = LlamaServerBackend(
+        endpoint_url=active_endpoint,
+        reasoning=agent_cfg.reasoning,
+        timeout=agent_cfg.timeout,
+    )
     env = get_default_env(cwd=session.cwd)
 
     console.print(f"[dim]OS: {env['os']} | Shell: {env['shell']} | User: {env['user']}[/dim]")
@@ -192,6 +183,7 @@ def main():
                     backend=backend,
                     verified_cache=verified_cache,
                     env=env,
+                    config=agent_cfg,
                 )
         except Exception as exc:
             console.print(f"[red]Proposal error:[/red] {exc}\n")

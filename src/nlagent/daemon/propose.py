@@ -20,13 +20,16 @@ import shutil
 from typing import Any, Callable
 
 from nlagent.cache.verified_cache import VerifiedCommandCache, make_env_key
+from nlagent.context.grounding import ground_request
 from nlagent.context.layout import build_prompt
+from nlagent.context.profile import UserProfile
 from nlagent.context.state import SessionState
 from nlagent.safety.effects import Effect, analyse, preview, tier_from_effect
 
 DEFAULT_L0_SYSTEM_PROMPT = (
-    "You are an AI-native operating system shell agent for Linux and macOS.\n"
-    "Convert user natural language requests into exact, safe terminal commands.\n"
+    "You are an AI-native operating system shell agent.\n"
+    "Convert user natural language requests into exact, safe terminal commands matching the active OS and Shell.\n"
+    "When Shell is 'powershell', emit valid PowerShell cmdlets (e.g., 'Get-ChildItem -Hidden', 'Get-ChildItem -Force', 'Get-ChildItem -Directory') with Windows paths ('C:\\\\Windows\\\\System32', 'C:\\\\ProgramData', 'C:\\\\') and never mix bash flags like 'ls -la'. Avoid scanning entire drive roots with '-Recurse' unless explicitly asked.\n"
     "You MUST respond ONLY with a single valid JSON object matching this schema:\n"
     "{\n"
     '  "command": "<exact shell command string>",\n'
@@ -50,18 +53,27 @@ def get_default_env(cwd: str | None = None) -> dict[str, Any]:
         path_style = "posix"
     else:
         clean_os = "Windows 11"
-        default_shell = "bash" if shutil.which("bash") else "powershell"
-        path_style = "posix" if shutil.which("bash") else "windows"
+        shell_pref = os.environ.get("NLAGENT_SHELL", "powershell").strip().lower()
+        default_shell = "bash" if (shell_pref == "bash" and shutil.which("bash")) else "powershell"
+        path_style = "posix" if default_shell == "bash" else "windows"
 
     user = getpass.getuser() or "user"
 
-    candidate_tools = [
-        "awk", "bash", "cat", "curl", "docker", "find", "git",
-        "grep", "pip", "python3", "sed", "tar", "zsh",
-    ]
-    available_tools = sorted([t for t in candidate_tools if shutil.which(t) is not None])
-    if not available_tools:
-        available_tools = ["bash", "cat", "curl", "git", "grep", "python3"]
+    if default_shell == "powershell":
+        candidate_tools = [
+            "cmd", "curl", "findstr", "git", "pip", "powershell", "python", "robocopy", "tar",
+        ]
+        available_tools = sorted([t for t in candidate_tools if shutil.which(t) is not None])
+        if not available_tools:
+            available_tools = ["cmd", "powershell", "python"]
+    else:
+        candidate_tools = [
+            "awk", "bash", "cat", "curl", "docker", "find", "git",
+            "grep", "pip", "python3", "sed", "tar", "zsh",
+        ]
+        available_tools = sorted([t for t in candidate_tools if shutil.which(t) is not None])
+        if not available_tools:
+            available_tools = ["bash", "cat", "curl", "git", "grep", "python3"]
 
     return {
         "available_tools": available_tools,
@@ -104,9 +116,14 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Failed to parse model output as JSON: {exc}\nRaw output: {raw_text[:200]}"
-        ) from exc
+        # Heal unescaped single backslashes inside Windows paths / PowerShell regexes (e.g. '^\.' or 'C:\Users')
+        repaired = re.sub(r'(?<!\\)\\(?![\\/"bfnrtu])', r"\\\\", text)
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            raise ValueError(
+                f"Failed to parse model output as JSON: {exc}\nRaw output: {raw_text[:200]}"
+            ) from exc
 
     if not isinstance(parsed, dict):
         raise ValueError(
@@ -127,8 +144,19 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
     if not isinstance(command_val, str):
         command_val = str(command_val) if command_val is not None else ""
 
-    if not command_val.strip() and not (clarifying_q or needs_clarification):
-        raise ValueError(f"'command' field must be a non-empty string, got: {command_val!r}")
+    if not command_val.strip():
+        explanation_val = str(
+            parsed.get("explanation")
+            or parsed.get("reason")
+            or parsed.get("message")
+            or parsed.get("refusal")
+            or ""
+        ).strip()
+        if explanation_val and not (clarifying_q or needs_clarification):
+            needs_clarification = True
+            clarifying_q = explanation_val
+        elif not (clarifying_q or needs_clarification):
+            raise ValueError(f"'command' field must be a non-empty string, got: {command_val!r}")
 
     targets = parsed.get("targets", [])
     if isinstance(targets, str):
@@ -161,19 +189,23 @@ def propose(
     n_predict: int = 256,
     reasoning: bool = True,
     config: Any | None = None,
+    profile: UserProfile | None = None,
+    enable_grounding: bool = True,
+    grounding_k: int = 5,
 ) -> dict[str, Any]:
     """
     Safe command proposal pipeline.
 
     Flow:
     1. Resolve references and render compact SessionState (L2).
-    2. Assemble 3-layer prompt via layout.build_prompt (L0, L1, L2).
-    3. Check VerifiedCommandCache:
+    2. Optional FILES block via bounded read-only grounding (L2, keeping L0/L1 byte-identical).
+    3. Assemble 3-layer prompt via layout.build_prompt (L0, L1, L2).
+    4. Check VerifiedCommandCache:
        - On hit: use verified proposal, bypass backend call.
        - On miss: query backend and validate JSON structure.
-    4. Run static effect analysis (effects.analyse) on the proposed command.
-    5. Determine risk tier via tier_from_effect.
-    6. Return {command, tier, preview, ...}.
+    5. Run static effect analysis (effects.analyse) on the proposed command.
+    6. Determine risk tier via tier_from_effect.
+    7. Return {command, tier, preview, ...}.
 
     NOTE: The LLM only proposes commands; NO execution occurs in this function.
     """
@@ -184,19 +216,42 @@ def propose(
     resolved_request = session_state.resolve_reference(request.strip())
     rendered_state = session_state.render()
 
+    # Grounding integration: discover real local filesystem paths matching request
+    active_enable_grounding = getattr(config, "enable_grounding", enable_grounding) if config is not None else enable_grounding
+    active_grounding_k = getattr(config, "grounding_k", grounding_k) if config is not None else grounding_k
+    active_profile = getattr(config, "profile", profile) if config is not None else profile
+
+    files_block = ""
+    if active_enable_grounding:
+        try:
+            files_block = ground_request(
+                request=resolved_request,
+                cwd=session_state.cwd,
+                profile=active_profile,
+                k=active_grounding_k,
+            )
+        except Exception:
+            files_block = ""
+
+    # Optional FILES block after STATE block
+    if files_block:
+        turn_state = f"{rendered_state}\n\n{files_block}" if rendered_state else files_block
+    else:
+        turn_state = rendered_state
+
     # Resolve configuration overrides if provided
     active_reasoning = getattr(config, "reasoning", reasoning) if config is not None else reasoning
     active_temperature = getattr(config, "temperature", temperature) if config is not None else temperature
     active_n_predict = getattr(config, "n_predict", n_predict) if config is not None else n_predict
 
-    # 2. Build deterministic L1 and 3-layer prompt
+    # 2. Build deterministic L1 and 3-layer prompt (L0 and L1 remain strictly byte-identical)
     active_env = env if env is not None else get_default_env(cwd=session_state.cwd)
     l0 = system_prompt if system_prompt is not None else DEFAULT_L0_SYSTEM_PROMPT
 
     prompt_parts = build_prompt(
         l0=l0,
         l1=active_env,
-        state=rendered_state,
+        state=turn_state,
         request=resolved_request,
         reasoning=active_reasoning,
     )
@@ -224,8 +279,8 @@ def propose(
     else:
         # Backend execution
         if backend is None:
-            from nlagent.backends.llama_server import LlamaServerBackend
-            backend = LlamaServerBackend(reasoning=active_reasoning)
+            from nlagent.backends.llama_server import LlamaServerBackend, resolve_local_endpoint
+            backend = LlamaServerBackend(endpoint_url=resolve_local_endpoint(), reasoning=active_reasoning)
 
         if hasattr(backend, "complete"):
             res = backend.complete(
@@ -235,7 +290,33 @@ def propose(
                 n_predict=active_n_predict,
                 reasoning=active_reasoning,
             )
+            if getattr(res, "status", "success") == "error" and getattr(res, "error", None):
+                raise RuntimeError(f"Connection or backend error: {res.error}")
             raw_output = res.content if hasattr(res, "content") else str(res)
+            if (
+                (not raw_output or not raw_output.strip())
+                and active_reasoning
+                and getattr(res, "reasoning_tokens", 0) > 0
+            ):
+                # Thinking trace exhausted n_predict budget; retry cleanly with thinking disabled
+                fallback_parts = build_prompt(
+                    l0=l0,
+                    l1=active_env,
+                    state=turn_state,
+                    request=resolved_request,
+                    reasoning=False,
+                )
+                res_retry = backend.complete(
+                    prompt=fallback_parts.full_text,
+                    cache_prompt=True,
+                    temperature=active_temperature,
+                    n_predict=active_n_predict,
+                    reasoning=False,
+                )
+                if getattr(res_retry, "status", "success") == "error" and getattr(res_retry, "error", None):
+                    raise RuntimeError(f"Connection or backend error: {res_retry.error}")
+                raw_output = res_retry.content if hasattr(res_retry, "content") else str(res_retry)
+                prompt_parts = fallback_parts
         elif callable(backend):
             raw_output = str(backend(prompt_parts.full_text))
         else:
@@ -275,5 +356,7 @@ def propose(
         "raw_output": raw_output,
         "clarifying_question": clarifying_question,
         "needs_clarification": bool(clarifying_question or needs_clarification),
+        "grounded_files": files_block,
+        "prompt_parts": prompt_parts,
     }
 

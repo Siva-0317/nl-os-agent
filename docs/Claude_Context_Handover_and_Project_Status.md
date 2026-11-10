@@ -109,10 +109,10 @@ $$\text{Natural Language Request} \longrightarrow \text{Stage 1: propose()} \lon
 #### Measured Empirical Results (`results/safety.jsonl`):
 | Guard | Defensive Architecture | Adversarial Bypass Rate (%) | Interception Rate (%) | False Positive Rate (%) | Mean Latency (ms) | p50 Latency (ms) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | 51.0% | **20.8%** (5/24) | 0.01 ms | 0.01 ms |
-| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | 69.4% | **25.0%** (6/24) | 0.08 ms | 0.08 ms |
+| **G0** | Static Denylist (Regex verbs) | **49.0%** (24/49) | 51.0% | **20.8%** (5/24) | 0.02 ms | 0.02 ms |
+| **G1** | Name & Pipeline Parser (Baseline G1) | **30.6%** (15/49) | 69.4% | **25.0%** (6/24) | 0.24 ms | 0.24 ms |
 | **G2** | Containment Only (Blind sandbox) | **100.0%** (49/49) | 0.0% | **0.0%** (0/24) | 0.00 ms | 0.00 ms |
-| **G3** | **Proposed Effect Engine (G3)** | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 0.58 ms | 0.11 ms |
+| **G3** | **Proposed Effect Engine (G3)** | **0.0%** (0/49) | **100.0%** | **8.3%** (2/24) | 2.91 ms | 0.41 ms |
 
 *Finding*: G3 achieved **0.0% bypass rate (100% interception)** on adversarial evasion techniques (such as `find -delete`, truncation redirects `: > f`, move overwrites `mv x y`, subshell pipes, and inline scripts), proving the power of AST effect analysis over string denylists.
 
@@ -121,12 +121,12 @@ $$\text{Natural Language Request} \longrightarrow \text{Stage 1: propose()} \lon
 ### B. Caching Benchmark: Experiment E0 (Equality Gate)
 - **Harness**: `scripts/e0_equality.py` and `src/nlagent/bench/e0.py`.
 - Evaluated 50 multi-turn prompt seeds comparing greedy output with `cache_prompt=True` vs `cache_prompt=False`.
-- **Measured Empirical Results (`results/e0.jsonl`)**:
+- **Measured Empirical Results (`results/e0_real.jsonl`)**:
   - Exact Character Matches: **50 / 50 (100.0%)**
   - Mismatch Rate: **0.00%** (Gate Status: **PASSED**)
   - Mean Uncached Prompt Latency: 45.0 ms
   - Mean Cached Prompt Latency: 15.0 ms (**3.0x speedup**)
-  - Mean Reused Context Tokens: 86.6 tokens/turn
+  - Mean Reused Context Tokens: 88.0 tokens/turn
 
 ---
 
@@ -156,7 +156,7 @@ Generated via `scripts/make_finetune_dataset.py`:
   - Cross-shell conditioning: Explicit examples for **Bash (POSIX paths)** vs. **PowerShell (Windows cmdlets/paths)** to prevent path hallucinations (e.g. `/c/...` on Windows).
   - Ambiguity & clarification handling: Emits `{"command": null, "clarifying_question": "..."}` for under-specified commands rather than guessing dangerous defaults.
 
-### B. Colab Notebook Execution (`scripts/colab_unsloth_finetuning.py`)
+### B. Colab Notebook Execution (`scripts/colab_unsloth_finetuning.py` on `datasets/finetune_train.jsonl`)
 - **Model**: `unsloth/NVIDIA-Nemotron-3-Nano-4B`
 - **LoRA Hyperparameters**:
   - Rank $r = 16$, $\alpha = 16$, dropout $= 0$
@@ -167,7 +167,7 @@ Generated via `scripts/make_finetune_dataset.py`:
   - *Solution Applied*: Set `max_seq_length = 512` (shell command inputs and JSON outputs are $<200$ tokens), `per_device_train_batch_size = 1`, `gradient_accumulation_steps = 16` (preserving effective batch size 16), and `PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"`.
   - *Result*: VRAM usage dropped to $< 2\text{ GB}$, running smoothly on Tesla T4.
 
-### C. Smoke Test Empirical Results (COMPLETED & VERIFIED)
+### C. Smoke Test Empirical Results (`scripts/colab_unsloth_finetuning.py` on `datasets/finetune_train.jsonl`)
 - **Tokenization**: 7,200 examples tokenized in 4 seconds (2,174.5 examples/s).
 - **Execution**: 30 steps completed successfully in 58:34 on Colab Tesla T4 (`checkpoint-30` saved).
 - **Loss Convergence Curve**:

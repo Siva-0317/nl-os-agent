@@ -1,0 +1,139 @@
+{
+  "git_sha": "dfce40e50ae122bbf342a84ccbef0a6eaab4bfaf",
+  "run_id": "9a1c5d17d6d6",
+  "timestamp": "2026-11-08T19:06:56.800605+00:00",
+  "total_attacks": 435,
+  "total_benign": 324,
+  "configurations": {
+    "G3-Full": {
+      "name": "Proposed Effect Engine (Full)",
+      "ablated_component": "none",
+      "description": "Full defense-in-depth engine with all 4 architectural components active",
+      "bypass_count": 58,
+      "bypass_rate_pct": 13.33,
+      "bypass_95_ci": [
+        10.28,
+        16.89
+      ],
+      "delta_bypass_pct": 0.0,
+      "delta_bypass_ci": [
+        0.0,
+        0.0
+      ],
+      "mcnemar_p_value": 1.0,
+      "false_alarms": 166,
+      "false_alarm_rate_pct": 51.23,
+      "false_alarm_95_ci": [
+        45.65,
+        56.8
+      ],
+      "delta_false_alarm_pct": 0.0,
+      "confirmation_burden_per_100": 51.23,
+      "mean_latency_ms": 27.7195
+    },
+    "G3-NoTOCTOU": {
+      "name": "No TOCTOU Re-Check",
+      "ablated_component": "TOCTOU re-check",
+      "description": "Ablates commit-time re-analysis; proposal-time decision is trusted blindly",
+      "bypass_count": 62,
+      "bypass_rate_pct": 14.25,
+      "bypass_95_ci": [
+        11.11,
+        17.9
+      ],
+      "delta_bypass_pct": 0.92,
+      "delta_bypass_ci": [
+        0.02,
+        1.82
+      ],
+      "mcnemar_p_value": 0.125,
+      "false_alarms": 166,
+      "false_alarm_rate_pct": 51.23,
+      "false_alarm_95_ci": [
+        45.65,
+        56.8
+      ],
+      "delta_false_alarm_pct": 0.0,
+      "confirmation_burden_per_100": 51.23,
+      "mean_latency_ms": 20.79
+    },
+    "G3-NoProtectedPaths": {
+      "name": "No Protected Paths",
+      "ablated_component": "Protected paths",
+      "description": "Ablates protected system paths and privileged machine-level registry protection",
+      "bypass_count": 59,
+      "bypass_rate_pct": 13.56,
+      "bypass_95_ci": [
+        10.49,
+        17.14
+      ],
+      "delta_bypass_pct": 0.23,
+      "delta_bypass_ci": [
+        -0.22,
+        0.68
+      ],
+      "mcnemar_p_value": 1.0,
+      "false_alarms": 166,
+      "false_alarm_rate_pct": 51.23,
+      "false_alarm_95_ci": [
+        45.65,
+        56.8
+      ],
+      "delta_false_alarm_pct": 0.0,
+      "confirmation_burden_per_100": 51.23,
+      "mean_latency_ms": 20.4734
+    },
+    "G3-NoOpaqueEscalation": {
+      "name": "No Opaque Escalation",
+      "ablated_component": "Opaque escalation",
+      "description": "Ablates opaque indirection escalation; dynamic/encoded commands default to unflagged",
+      "bypass_count": 186,
+      "bypass_rate_pct": 42.76,
+      "bypass_95_ci": [
+        38.06,
+        47.56
+      ],
+      "delta_bypass_pct": 29.43,
+      "delta_bypass_ci": [
+        25.14,
+        33.71
+      ],
+      "mcnemar_p_value": 0.0,
+      "false_alarms": 35,
+      "false_alarm_rate_pct": 10.8,
+      "false_alarm_95_ci": [
+        7.64,
+        14.7
+      ],
+      "delta_false_alarm_pct": -40.43,
+      "confirmation_burden_per_100": 10.8,
+      "mean_latency_ms": 21.2029
+    },
+    "G3-NoSymlinkResolution": {
+      "name": "No Symlink Resolution",
+      "ablated_component": "Symlink resolution",
+      "description": "Ablates realpath resolution; inspects only lexical paths without traversing symlinks",
+      "bypass_count": 58,
+      "bypass_rate_pct": 13.33,
+      "bypass_95_ci": [
+        10.28,
+        16.89
+      ],
+      "delta_bypass_pct": 0.0,
+      "delta_bypass_ci": [
+        0.0,
+        0.0
+      ],
+      "mcnemar_p_value": 1.0,
+      "false_alarms": 166,
+      "false_alarm_rate_pct": 51.23,
+      "false_alarm_95_ci": [
+        45.65,
+        56.8
+      ],
+      "delta_false_alarm_pct": 0.0,
+      "confirmation_burden_per_100": 51.23,
+      "mean_latency_ms": 20.6258
+    }
+  }
+}

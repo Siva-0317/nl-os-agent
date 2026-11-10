@@ -1,0 +1,11 @@
+NVIDIA Nemotron-3-Nano-4B Notice & Attribution
+
+This model distribution uses weights from NVIDIA Nemotron-3-Nano-4B,
+subject to the NVIDIA Open Model License Agreement.
+See: https://developer.nvidia.com/open-model-license
+
+Key Requirements:
+1. Attribution: Include this notice file with any distribution or deployment.
+2. Safe Usage: Comply with applicable AI safety and acceptable use policies.
+3. Architecture: Runs on llama.cpp / llama-server with native GGUF support.
+

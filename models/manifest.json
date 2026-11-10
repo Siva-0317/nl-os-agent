@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "name": "nemotron-3-nano-4b",
+      "quant": "Q4_K_M",
+      "size": 2482386944,
+      "sha256": "393cb510ce603d52f9b2d89e47f25902fa0f738cfcb08e33f3885d77f0a99676",
+      "min_ram_gb": 8.0,
+      "notice_file": "NOTICE",
+      "url": "https://huggingface.co/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf",
+      "filename": "nemotron-3-nano-4b.Q4_K_M.gguf",
+      "description": "NVIDIA Nemotron 3 Nano 4B quantized to Q4_K_M for fast, accurate OS command generation"
+    },
+    {
+      "name": "nemotron-3-nano-4b-dense",
+      "quant": "Q4_K_M",
+      "size": 2482386944,
+      "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+      "min_ram_gb": 8.0,
+      "notice_file": "NOTICE",
+      "url": "https://huggingface.co/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf",
+      "filename": "nemotron-3-nano-4b-dense.Q4_K_M.gguf",
+      "description": "NVIDIA Nemotron 3 Nano 4B Dense architecture restored for full llama.cpp engine compatibility"
+    }
+  ]
+}
+

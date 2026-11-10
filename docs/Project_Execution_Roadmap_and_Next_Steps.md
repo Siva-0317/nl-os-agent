@@ -146,7 +146,7 @@ When writing the project report and paper, emphasize these four positioning pill
 
 ### 1. Caching and Safety Bound Together (Novel Contribution)
 Most LLM caching literature focuses purely on token latency and assumes deterministic output. Our work evaluates:
-- **Greedy Output Identity (E0)**: 100% character-by-character output equality between cached and uncached runs across 50 multi-turn prompts (`results/e0.jsonl`).
+- **Greedy Output Identity (E0)**: 100% character-by-character output equality between cached and uncached runs across 50 multi-turn prompts (`results/e0_real.jsonl`).
 - **Safety Decision Invariance**: Proof that verified semantic caching (`VerifiedCommandCache`) never bypasses static safety analysis; every cache hit is re-verified by `effects.analyse`.
 
 ### 2. Honest Failure Mode Analysis of the Static Effect Engine

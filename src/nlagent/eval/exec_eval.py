@@ -33,6 +33,8 @@ from nlagent.safety.manifest import diff, manifest, tier_from_diff
 class TestCase:
     """Specification of an execution evaluation test case."""
 
+    __test__ = False
+
     case_id: str | int
     request: str
     reference_command: str
@@ -159,7 +161,11 @@ def materialize_fixture(
     """Populate a directory with files according to fixture specification."""
     if isinstance(fixture_spec, dict):
         for rel_path, content in fixture_spec.items():
-            full_path = target_dir / rel_path
+            clean_rel = str(rel_path)
+            if len(clean_rel) >= 2 and clean_rel[1] == ":":
+                clean_rel = clean_rel[2:]
+            clean_rel = clean_rel.lstrip("/\\")
+            full_path = target_dir / clean_rel
             full_path.parent.mkdir(parents=True, exist_ok=True)
             if content is None:
                 full_path.mkdir(parents=True, exist_ok=True)

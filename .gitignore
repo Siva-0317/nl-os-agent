@@ -34,3 +34,15 @@ build/
 # IDE & OS Files
 .DS_Store
 Thumbs.db
+
+# Local Model Weights & Precompiled Binaries (see models/manifest.json)
+*.gguf
+*.gguf.part
+bin/
+
+# Local Agent State, Quarantine & Study Telemetry
+.nlagent/
+results/study_trials.jsonl
+
+# Archived Milestones
+legacy_setup2/

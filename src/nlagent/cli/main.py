@@ -84,41 +84,64 @@ def handle_propose(args: argparse.Namespace) -> int:
 
     proposal_id = f"p_{uuid.uuid4().hex[:8]}"
 
-    # Mock backend mode for offline testing / CI
-    if args.mock:
-        mock_cmd = str(args.mock).strip()
-        mock_backend = lambda prompt: json.dumps({
-            "command": mock_cmd,
-            "targets": [mock_cmd.split()[-1]] if len(mock_cmd.split()) > 1 else [],
-            "explanation": "Mock proposal for testing",
-        })
-        backend = mock_backend
-    else:
-        # Check environment variable override or live backend
-        mock_env = os.environ.get("NLAGENT_MOCK_PROPOSAL")
-        if mock_env:
-            backend = lambda prompt: mock_env
-        else:
-            backend = LlamaServerBackend(endpoint_url=resolve_local_endpoint())
-
+    # 1. Try querying background core service daemon first
+    res = None
     try:
-        res = propose(
-            request=request,
-            session_state=session,
-            backend=backend,
-            verified_cache=cache,
-            env=env,
-        )
-    except Exception as exc:
-        err_msg = str(exc)
-        if any(h in err_msg.lower() for h in ("connection", "refused", "empty response", "max retries")):
-            sys.stderr.write(
-                f"\n{ANSI_RED}Cannot connect to local LLM server on port 1234 (LM Studio) or 8080 (llama-server).{ANSI_RESET}\n"
-                f"{ANSI_YELLOW}Tip: Start your local server in LM Studio (Developer tab -> Start Server), or pass --mock for testing.{ANSI_RESET}\n"
-            )
+        from nlagent.service.core import ServiceClient
+        client = ServiceClient()
+        if client.is_service_running():
+            service_res = client.propose(request=request, cwd=cwd, mock=args.mock)
+            if service_res and "command" in service_res:
+                res = service_res
+                proposal_id = res.get("id") or proposal_id
+    except Exception:
+        res = None
+
+    # 2. In-process fallback execution
+    if res is None:
+        # Mock backend mode for offline testing / CI
+        from nlagent.config import AgentConfig
+        agent_cfg = AgentConfig.from_env()
+
+        if args.mock:
+            mock_cmd = str(args.mock).strip()
+            mock_backend = lambda prompt: json.dumps({
+                "command": mock_cmd,
+                "targets": [mock_cmd.split()[-1]] if len(mock_cmd.split()) > 1 else [],
+                "explanation": "Mock proposal for testing",
+            })
+            backend = mock_backend
         else:
-            sys.stderr.write(f"\n{ANSI_RED}Error proposing command:{ANSI_RESET} {exc}\n")
-        return 1
+            # Check environment variable override or live backend
+            mock_env = os.environ.get("NLAGENT_MOCK_PROPOSAL")
+            if mock_env:
+                backend = lambda prompt: mock_env
+            else:
+                backend = LlamaServerBackend(
+                    endpoint_url=resolve_local_endpoint(),
+                    reasoning=agent_cfg.reasoning,
+                    timeout=agent_cfg.timeout,
+                )
+
+        try:
+            res = propose(
+                request=request,
+                session_state=session,
+                backend=backend,
+                verified_cache=cache,
+                env=env,
+                config=agent_cfg,
+            )
+        except Exception as exc:
+            err_msg = str(exc)
+            if any(h in err_msg.lower() for h in ("connection", "refused", "empty response", "max retries")):
+                sys.stderr.write(
+                    f"\n{ANSI_RED}Cannot connect to local LLM server on port 1234 (LM Studio) or 8080 (llama-server).{ANSI_RESET}\n"
+                    f"{ANSI_YELLOW}Tip: Start your local server in LM Studio (Developer tab -> Start Server), or pass --mock for testing.{ANSI_RESET}\n"
+                )
+            else:
+                sys.stderr.write(f"\n{ANSI_RED}Error proposing command:{ANSI_RESET} {exc}\n")
+            return 1
 
     cmd = res.get("command", "").strip()
     tier = res.get("tier", "read_only")
@@ -141,7 +164,10 @@ def handle_propose(args: argparse.Namespace) -> int:
 
     # 1. Emit preview on stderr
     tier_badge = colorize_tier(tier)
-    sys.stderr.write(f"\n{tier_badge} {ANSI_BOLD}{cmd}{ANSI_RESET}\n")
+    if cmd:
+        sys.stderr.write(f"\n{tier_badge} {ANSI_BOLD}{cmd}{ANSI_RESET}\n")
+    else:
+        sys.stderr.write(f"\n{tier_badge} {ANSI_YELLOW}[No executable command generated - clarification or refusal]{ANSI_RESET}\n")
     if preview_text and preview_text != "No filesystem effect detected.":
         sys.stderr.write(f"{preview_text}\n")
     if explanation:
@@ -149,6 +175,10 @@ def handle_propose(args: argparse.Namespace) -> int:
     sys.stderr.write(f"Proposal ID: {ANSI_BOLD}{proposal_id}{ANSI_RESET}\n\n")
 
     # 2. Output on stdout according to format flags
+    if not cmd:
+        sys.stdout.flush()
+        return 0
+
     if args.json:
         out_data = {
             "id": proposal_id,
@@ -235,7 +265,26 @@ def handle_commit(args: argparse.Namespace) -> int:
         sys.stdout.flush()
         return 0
 
-    # Normal commit execution
+    # Try committing via core service daemon if active
+    try:
+        from nlagent.service.core import ServiceClient
+        client = ServiceClient()
+        if client.is_service_running():
+            exit_code, res = client.commit(
+                proposal_id=proposal_id,
+                allow_privileged=args.allow_privileged,
+                no_quarantine=args.no_quarantine,
+                confirmed_large=args.confirmed_large,
+            )
+            output = res.get("output", "")
+            if output:
+                sys.stdout.write(output + "\n")
+                sys.stdout.flush()
+            return exit_code
+    except Exception:
+        pass
+
+    # Normal in-process commit execution
     output, exit_code, fresh_effect = commit(
         proposal=record,
         session_state=session,
@@ -280,6 +329,26 @@ def handle_undo(args: argparse.Namespace) -> int:
         else:
             sys.stderr.write("No executed proposal found to undo.\n")
             return 1
+
+    # Try undoing via core service daemon if active
+    try:
+        from nlagent.service.core import ServiceClient
+        client = ServiceClient()
+        if client.is_service_running():
+            res = client.undo(target_id=target_id, on_clash=args.on_clash)
+            if res.get("success"):
+                sys.stdout.write(f"{ANSI_GREEN}{ANSI_BOLD}Undo successful:{ANSI_RESET} {res.get('message')}\n")
+                for p in res.get("restored_paths", []):
+                    sys.stdout.write(f"  Restored: {p}\n")
+                return 0
+            elif "error" in res or res.get("failed_paths"):
+                msg = res.get("error") or res.get("message")
+                sys.stderr.write(f"{ANSI_YELLOW}Undo completed with errors:{ANSI_RESET} {msg}\n")
+                for p in res.get("failed_paths", []):
+                    sys.stderr.write(f"  Failed: {p}\n")
+                return 1
+    except Exception:
+        pass
 
     try:
         undo_res = quarantine_undo(
@@ -352,6 +421,27 @@ def handle_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_doctor(args: argparse.Namespace) -> int:
+    """Execute nlagent doctor diagnostic audit."""
+    from nlagent.runtime.manager import run_doctor
+
+    report = run_doctor(model_path=getattr(args, "model", None))
+    if getattr(args, "json", False):
+        sys.stdout.write(json.dumps(report.raw_data, indent=2) + "\n")
+    elif getattr(args, "copy", False):
+        sys.stdout.write(report.get_redacted_text() + "\n")
+    else:
+        sys.stdout.write(report.diagnostics_text + "\n")
+
+    return 0 if report.all_passed else 1
+
+
+def handle_service(args: argparse.Namespace) -> int:
+    """Manage NLAgent background core daemon service."""
+    from nlagent.service.core import handle_service_command
+    return handle_service_command(args.action)
+
+
 # -----------------------------------------------------------------------------
 # CLI Parser Setup
 # -----------------------------------------------------------------------------
@@ -359,6 +449,9 @@ def handle_history(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", default=None, help="Custom SQLite state database path")
+
+    sub_common = argparse.ArgumentParser(add_help=False)
+    sub_common.add_argument("--db", default=argparse.SUPPRESS, help="Custom SQLite state database path")
 
     parser = argparse.ArgumentParser(
         prog="nlctl",
@@ -372,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_propose = subparsers.add_parser(
         "propose",
         help="Propose a safe terminal command from natural language",
-        parents=[common],
+        parents=[sub_common],
     )
     p_propose.add_argument("request", help="Natural language user request")
     p_propose.add_argument("--cwd", default=None, help="Working directory context")
@@ -385,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_commit = subparsers.add_parser(
         "commit",
         help="Commit and execute a proposed command",
-        parents=[common],
+        parents=[sub_common],
     )
     p_commit.add_argument("id", help="Proposal ID to commit")
     p_commit.add_argument("--emit-shell", action="store_true", help="Emit raw command string for parent shell eval")
@@ -397,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_undo = subparsers.add_parser(
         "undo",
         help="Roll back filesystem state from quarantine",
-        parents=[common],
+        parents=[sub_common],
     )
     p_undo.add_argument("id", nargs="?", default=None, help="Proposal ID or Quarantine ID to rollback (default: latest)")
     p_undo.add_argument("--on-clash", choices=["error", "backup", "overwrite"], default="error", help="Conflict resolution")
@@ -406,10 +499,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_history = subparsers.add_parser(
         "history",
         help="List recent proposals and execution history",
-        parents=[common],
+        parents=[sub_common],
     )
     p_history.add_argument("--limit", type=int, default=20, help="Maximum number of history records to show")
     p_history.add_argument("--json", action="store_true", help="Emit history as JSON")
+
+    # doctor
+    p_doctor = subparsers.add_parser(
+        "doctor",
+        help="Run system, hardware, and model diagnostic health check",
+        parents=[sub_common],
+    )
+    p_doctor.add_argument("--json", action="store_true", help="Emit raw diagnostics as JSON")
+    p_doctor.add_argument("--copy", action="store_true", help="Emit redacted diagnostic output for copying")
+    p_doctor.add_argument("--model", default=None, help="Specific model file path to verify")
+
+    # service
+    p_service = subparsers.add_parser(
+        "service",
+        help="Manage background core daemon service",
+        parents=[sub_common],
+    )
+    p_service.add_argument(
+        "action",
+        choices=["start", "stop", "status"],
+        default="status",
+        nargs="?",
+        help="Service action to perform (default: status)",
+    )
 
     return parser
 
@@ -423,6 +540,8 @@ def main() -> None:
         "commit": handle_commit,
         "undo": handle_undo,
         "history": handle_history,
+        "doctor": handle_doctor,
+        "service": handle_service,
     }
 
     handler = handlers.get(args.subcommand)

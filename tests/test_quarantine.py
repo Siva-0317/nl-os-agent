@@ -348,7 +348,9 @@ class TestQuarantineAndUndo(unittest.TestCase):
         os.utime(rec1, (old_time, old_time))
 
         # rec2 manifest with timestamp now
-        m2 = {"request_id": "recent_req", "timestamp": "2026-11-02T00:00:00+00:00", "items": []}
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        m2 = {"request_id": "recent_req", "timestamp": now_iso, "items": []}
         with open(rec2 / "manifest.json", "w", encoding="utf-8") as f:
             json.dump(m2, f)
 

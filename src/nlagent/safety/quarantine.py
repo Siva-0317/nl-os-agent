@@ -227,6 +227,12 @@ def quarantine_effect(
             seen_paths.add(norm)
             targets_to_shadow.append((norm, "overwrite"))
 
+    for p in effect.appends:
+        norm = os.path.normpath(os.path.abspath(p))
+        if norm not in seen_paths and os.path.lexists(norm):
+            seen_paths.add(norm)
+            targets_to_shadow.append((norm, "overwrite"))
+
     if not targets_to_shadow:
         return None
 

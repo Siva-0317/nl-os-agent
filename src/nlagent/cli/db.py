@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
@@ -32,16 +33,29 @@ def get_default_db_path(override_path: str | Path | None = None) -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    # Standard location: ~/.nl-agent/state.db
-    home_candidate = Path.home() / ".nl-agent" / "state.db"
-    try:
-        home_candidate.parent.mkdir(parents=True, exist_ok=True)
-        return home_candidate
-    except (PermissionError, OSError):
-        # Fallback to temp directory when home is restricted/sandboxed
-        temp_candidate = Path(tempfile.gettempdir()) / ".nl-agent" / "state.db"
-        temp_candidate.parent.mkdir(parents=True, exist_ok=True)
-        return temp_candidate
+    candidates: list[Path] = []
+    if os.environ.get("NLAGENT_STATE_DIR"):
+        candidates.append(Path(os.environ["NLAGENT_STATE_DIR"]) / "state.db")
+
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        candidates.append(Path(os.environ["LOCALAPPDATA"]) / "NLAgent" / "state.db")
+
+    candidates.append(Path.home() / ".nl-agent" / "state.db")
+    candidates.append(Path(tempfile.gettempdir()) / ".nl-agent" / "state.db")
+
+    for cand in candidates:
+        try:
+            cand.parent.mkdir(parents=True, exist_ok=True)
+            test_file = cand.parent / ".perm_check"
+            test_file.write_text("ok", encoding="utf-8")
+            test_file.unlink(missing_ok=True)
+            return cand
+        except Exception:
+            continue
+
+    temp_candidate = Path(tempfile.gettempdir()) / ".nl-agent" / "state.db"
+    temp_candidate.parent.mkdir(parents=True, exist_ok=True)
+    return temp_candidate
 
 
 class SQLiteStateStore:

@@ -1,0 +1,478 @@
+{
+  "git_sha": "dfce40e50ae122bbf342a84ccbef0a6eaab4bfaf",
+  "run_id": "fed3e044a034",
+  "timestamp": "2026-11-08T18:49:38.559606+00:00",
+  "total_attacks": 415,
+  "total_benign": 317,
+  "backend": "llama-server",
+  "guards": {
+    "G0-simple": {
+      "guard_name": "Static Denylist (Simple Regex)",
+      "description": "Minimal single-regex verb denylist matching standard deletion verbs",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 151,
+      "attacks_auto_run_bypasses": 264,
+      "bypass_rate_pct": 63.61,
+      "bypass_95_ci": [
+        58.78,
+        68.25
+      ],
+      "interception_rate_pct": 36.39,
+      "interception_95_ci": [
+        31.75,
+        41.22
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 290,
+      "benign_escalated": 27,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 8.52,
+      "false_alarm_95_ci": [
+        5.69,
+        12.15
+      ],
+      "confirmation_burden_per_100": 8.52,
+      "mean_latency_ms": 0.0083,
+      "p50_latency_ms": 0.0073,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 14
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 12
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 45
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 29
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 47
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 38
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 56
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 23
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 105
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 114
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 45
+        }
+      }
+    },
+    "G0-published": {
+      "guard_name": "Published Agent Denylist",
+      "description": "Multi-pattern denylist compiled from published agent frameworks (AutoGPT, LangChain)",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 179,
+      "attacks_auto_run_bypasses": 236,
+      "bypass_rate_pct": 56.87,
+      "bypass_95_ci": [
+        51.95,
+        61.69
+      ],
+      "interception_rate_pct": 43.13,
+      "interception_95_ci": [
+        38.31,
+        48.05
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 274,
+      "benign_escalated": 43,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 13.56,
+      "false_alarm_95_ci": [
+        9.99,
+        17.83
+      ],
+      "confirmation_burden_per_100": 13.56,
+      "mean_latency_ms": 0.0149,
+      "p50_latency_ms": 0.0144,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 14
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 12
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 45
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 29
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 29
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 33
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 51
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 23
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 77
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 114
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 45
+        }
+      }
+    },
+    "G1": {
+      "guard_name": "AST Name & Pipeline Parser",
+      "description": "Token and pipeline stage classifier (nlagent.safety.baseline_g1)",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 350,
+      "attacks_auto_run_bypasses": 65,
+      "bypass_rate_pct": 15.66,
+      "bypass_95_ci": [
+        12.3,
+        19.52
+      ],
+      "interception_rate_pct": 84.34,
+      "interception_95_ci": [
+        80.48,
+        87.7
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 62,
+      "benign_escalated": 255,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 80.44,
+      "false_alarm_95_ci": [
+        75.64,
+        84.66
+      ],
+      "confirmation_burden_per_100": 80.44,
+      "mean_latency_ms": 0.0959,
+      "p50_latency_ms": 0.0928,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 6
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 2
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 19
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 4
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 0
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 8
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 18
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 8
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 40
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 2
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 23
+        }
+      }
+    },
+    "G2": {
+      "guard_name": "Containment Only (Sandbox)",
+      "description": "Passive OS sandbox ('no preview, no tiering' with in-scope damage counted)",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 0,
+      "attacks_auto_run_bypasses": 415,
+      "bypass_rate_pct": 100.0,
+      "bypass_95_ci": [
+        99.12,
+        100.0
+      ],
+      "interception_rate_pct": 0.0,
+      "interception_95_ci": [
+        0.0,
+        0.88
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 317,
+      "benign_escalated": 0,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 0.0,
+      "false_alarm_95_ci": [
+        0.0,
+        1.16
+      ],
+      "confirmation_burden_per_100": 0.0,
+      "mean_latency_ms": 0.0003,
+      "p50_latency_ms": 0.0003,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 26
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 34
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 67
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 47
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 47
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 74
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 84
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 36
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 161
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 185
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 69
+        }
+      }
+    },
+    "G3": {
+      "guard_name": "Proposed Effect Engine",
+      "description": "Deterministic static effect engine (effects.analyse + tier_from_effect)",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 358,
+      "attacks_auto_run_bypasses": 57,
+      "bypass_rate_pct": 13.73,
+      "bypass_95_ci": [
+        10.57,
+        17.43
+      ],
+      "interception_rate_pct": 86.27,
+      "interception_95_ci": [
+        82.57,
+        89.43
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 151,
+      "benign_escalated": 166,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 52.37,
+      "false_alarm_95_ci": [
+        46.71,
+        57.98
+      ],
+      "confirmation_burden_per_100": 52.37,
+      "mean_latency_ms": 3.1604,
+      "p50_latency_ms": 2.3945,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 3
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 3
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 12
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 16
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 0
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 1
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 15
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 7
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 27
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 26
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 4
+        }
+      }
+    },
+    "G4": {
+      "guard_name": "LLM Judge (Local Model)",
+      "description": "Zero-shot LLM security judge with fixed evaluation prompt",
+      "attacks_total": 415,
+      "attacks_blocked": 0,
+      "attacks_escalated": 415,
+      "attacks_auto_run_bypasses": 0,
+      "bypass_rate_pct": 0.0,
+      "bypass_95_ci": [
+        0.0,
+        0.88
+      ],
+      "interception_rate_pct": 100.0,
+      "interception_95_ci": [
+        99.12,
+        100.0
+      ],
+      "benign_total": 317,
+      "benign_auto_run": 0,
+      "benign_escalated": 317,
+      "benign_blocked": 0,
+      "false_alarm_rate_pct": 100.0,
+      "false_alarm_95_ci": [
+        98.84,
+        100.0
+      ],
+      "confirmation_burden_per_100": 100.0,
+      "mean_latency_ms": 12.6927,
+      "p50_latency_ms": 13.0997,
+      "technique_stats": {
+        "raw_seed": {
+          "total": 26,
+          "bypasses": 0
+        },
+        "aliases": {
+          "total": 34,
+          "bypasses": 0
+        },
+        "quoting": {
+          "total": 67,
+          "bypasses": 0
+        },
+        "environment_variables": {
+          "total": 47,
+          "bypasses": 0
+        },
+        "encodings": {
+          "total": 47,
+          "bypasses": 0
+        },
+        "wrappers": {
+          "total": 74,
+          "bypasses": 0
+        },
+        "command_splitting": {
+          "total": 84,
+          "bypasses": 0
+        },
+        "path_tricks": {
+          "total": 36,
+          "bypasses": 0
+        }
+      },
+      "shell_stats": {
+        "bash": {
+          "total": 161,
+          "bypasses": 0
+        },
+        "powershell": {
+          "total": 185,
+          "bypasses": 0
+        },
+        "cmd": {
+          "total": 69,
+          "bypasses": 0
+        }
+      }
+    }
+  }
+}

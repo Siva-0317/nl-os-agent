@@ -79,15 +79,31 @@ def get_preferred_shell() -> str | None:
     return None
 
 
+def _should_use_bash_on_windows(command: str) -> bool:
+    """Return True if a Windows command explicitly uses POSIX tools without PowerShell/drive syntax."""
+    import re
+    stripped = command.strip()
+    if os.environ.get("NLAGENT_SHELL", "").strip().lower() == "bash":
+        return True
+    # Explicit PowerShell cmdlets or Windows drive paths must run in PowerShell/cmd
+    if re.search(r"\b(Get|Set|New|Remove|Copy|Move|Rename|Select|Test|Where|ForEach|Format|Out)-[A-Za-z]+\b", stripped, re.IGNORECASE):
+        return False
+    if re.search(r"[A-Za-z]:\\", stripped):
+        return False
+    first_word = stripped.split()[0].lower() if stripped.split() else ""
+    return first_word in ("ls", "rm", "find", "grep", "cat", "head", "tail", "wc", "touch", "chmod", "chown", "ln")
+
+
 def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
     """Execute shell command in target working directory with timeout handling."""
     if not command or not command.strip():
         return "", 0
 
     bash_exe = get_preferred_shell()
+    use_bash = bool(bash_exe and (sys.platform != "win32" or _should_use_bash_on_windows(command)))
 
     try:
-        if bash_exe:
+        if use_bash and bash_exe:
             proc = subprocess.run(
                 [bash_exe, "-c", command],
                 capture_output=True,
@@ -271,7 +287,7 @@ def commit(
         return err_msg, 126, fresh_effect
 
     # 4. Pre-execution Quarantine: shadow items before destructive mutation
-    if enable_quarantine and (fresh_effect.deletes or fresh_effect.overwrites):
+    if enable_quarantine and (fresh_effect.deletes or fresh_effect.overwrites or fresh_effect.appends):
         req_id = str(proposal.get("request_id") or proposal.get("id") or f"req_{int(time.time() * 1000)}")
         try:
             quarantine_manifest = quarantine_effect(

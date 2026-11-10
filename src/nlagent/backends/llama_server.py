@@ -8,6 +8,7 @@ llama.cpp's llama-server HTTP endpoints. Records the server's `timings` object
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -97,12 +98,15 @@ def get_preferred_model_id(models_endpoint: str = "http://127.0.0.1:1234/v1/mode
 
 def resolve_local_endpoint(endpoint_url: str = "http://127.0.0.1:8080/completion") -> str:
     """Probe 8080 (llama-server) and 1234 (LM Studio) to auto-select active local server."""
+    env_override = os.environ.get("NLAGENT_ENDPOINT") or os.environ.get("LLAMA_SERVER_URL")
+    if env_override:
+        return env_override
     if endpoint_url != "http://127.0.0.1:8080/completion":
         return endpoint_url
     try:
         r = requests.get("http://127.0.0.1:8080/health", timeout=0.25)
         if r.status_code == 200:
-            return endpoint_url
+            return "http://127.0.0.1:8080/v1/chat/completions"
     except Exception:
         pass
     try:
@@ -111,7 +115,7 @@ def resolve_local_endpoint(endpoint_url: str = "http://127.0.0.1:8080/completion
             return "http://127.0.0.1:1234/v1/chat/completions"
     except Exception:
         pass
-    return endpoint_url
+    return "http://127.0.0.1:8080/v1/chat/completions"
 
 
 class LlamaServerBackend:
@@ -149,15 +153,17 @@ class LlamaServerBackend:
 
         is_chat_api = "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url
         if is_chat_api:
+            clean_user_prompt = re.sub(r"\n?<think></think>\s*$", "", prompt_str).strip()
             model_id = self.model_name or extra_params.pop("model", None)
             if not model_id:
                 models_url = self.endpoint_url.replace("/chat/completions", "/models")
                 model_id = get_preferred_model_id(models_url) or "nvidia/nemotron-3-nano-4b"
             payload: dict[str, Any] = {
                 "model": model_id,
-                "messages": [{"role": "user", "content": prompt_str}],
+                "messages": [{"role": "user", "content": clean_user_prompt}],
                 "temperature": temperature,
                 "max_tokens": n_predict,
+                "cache_prompt": cache_prompt,
             }
             if not active_reasoning:
                 # Official Nemotron-3-Nano model card mechanism to disable reasoning trace

@@ -29,9 +29,12 @@ for p in (root_dir, src_dir, scripts_dir):
 
 from nlagent.bench.provenance import validate_provenance
 from scripts.run_e5 import (
+    MockLlamaBackend,
     calculate_mcnemar_test,
+    calculate_paired_difference,
     calculate_wilson_interval,
     generate_sealed_test_set,
+    load_dev_v3_dataset,
     load_or_create_sealed_test_set,
     parse_model_response,
     run_e5_experiment,
@@ -217,6 +220,67 @@ class TestE5Runner(unittest.TestCase):
         self.assertIn("Statistical Significance (McNemar's Paired Tests)", md_content)
         self.assertIn("Wilson CI", md_content)
         self.assertIn("Prompt Token Reduction", md_content)
+
+    def test_dev_v3_dataset_enforces_n_100(self):
+        # 1. Existing dev_v3 dataset has N >= 100
+        cases = load_dev_v3_dataset("datasets/dev_v3.jsonl", enforce_min_n=True)
+        self.assertGreaterEqual(len(cases), 100)
+
+        # 2. Sub-100 dataset raises ValueError
+        short_file = os.path.join(self.temp_dir, "short_dev.jsonl")
+        with open(short_file, "w", encoding="utf-8") as f:
+            for i in range(50):
+                f.write(json.dumps({"case_id": f"c_{i}", "request": "test"}) + "\n")
+
+        with self.assertRaises(ValueError):
+            load_dev_v3_dataset(short_file, enforce_min_n=True)
+
+    def test_mock_backend_excluded_by_default(self):
+        # Passing mock backend when allow_mock=False must raise RuntimeError
+        mock_backend = MockLlamaBackend("tuned", "short")
+        with self.assertRaises(RuntimeError):
+            run_e5_experiment(
+                split="dev",
+                allow_mock=False,
+                tuned_backend=mock_backend,
+            )
+
+    def test_paired_difference_calculation(self):
+        # Outcomes: A passes 80, B passes 60, both pass 55, discordant: A-only=25, B-only=5
+        # Delta = (25 - 5) / 100 = 0.20 (+20%)
+        vec_a = [True] * 25 + [False] * 5 + [True] * 55 + [False] * 15
+        vec_b = [False] * 25 + [True] * 5 + [True] * 55 + [False] * 15
+        delta, low, high = calculate_paired_difference(vec_a, vec_b)
+        self.assertEqual(delta, 20.0)
+        self.assertGreater(low, 0.0)
+        self.assertLess(high, 40.0)
+        self.assertTrue(low <= delta <= high)
+
+    def test_end_to_end_dev_split_evaluation(self):
+        jsonl_out = os.path.join(self.temp_dir, "e5_dev.jsonl")
+        md_out = os.path.join(self.temp_dir, "e5_dev_summary.md")
+
+        # Run dev split evaluation with allow_mock=True on 8 cases
+        summaries, mcnemar_pairs = run_e5_experiment(
+            test_file="datasets/dev_v3.jsonl",
+            output_jsonl=jsonl_out,
+            output_md=md_out,
+            split="dev",
+            allow_mock=True,
+            count=8,
+            seed=42,
+        )
+
+        self.assertIn("tuned_short", summaries)
+        self.assertIn("base_short", summaries)
+        self.assertTrue(os.path.exists(jsonl_out))
+        self.assertTrue(os.path.exists(md_out))
+
+        # Check provenance on dev output records
+        with open(jsonl_out, "r", encoding="utf-8") as f:
+            first_line = json.loads(f.readline())
+        missing = validate_provenance(first_line)
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

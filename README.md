@@ -1,308 +1,161 @@
 # NL-OS-Agent: Safety-Verified AI-Native Operating System Shell Agent
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Test Suite](https://img.shields.io/badge/tests-39%2F39%20passing%20(100%25)-brightgreen.svg)]()
-[![Safety Guard G3](https://img.shields.io/badge/adversarial%20bypass-0.0%25%20(G3)-brightgreen.svg)]()
-[![Prefix Cache](https://img.shields.io/badge/prefix%20cache-%3C1ms%20lookup-success.svg)]()
+[![Test Suite](https://img.shields.io/badge/tests-398%20passed%2C%201%20skipped-brightgreen.svg)]()
+[![Sealed Interception](https://img.shields.io/badge/Combined%20G0--G3%20interception-98.3%25-brightgreen.svg)]()
+[![Tuned Short Accuracy](https://img.shields.io/badge/E5%20Tuned--Short-94.0%25%20%40%205.0x%20TTFT-success.svg)]()
 [![Architecture](https://img.shields.io/badge/pipeline-two--phase%20propose%2Fcommit-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**NL-OS-Agent** is a production-grade, safety-verified natural language interface for modern operating system terminals (Linux, macOS, and Windows). It translates high-level natural language instructions into precise shell commands using local hybrid language models (NVIDIA Nemotron 3 Nano / LLaMA) backed by a **formal two-phase `propose()` / `commit()` execution pipeline**, **deterministic static effect analysis**, **TOCTOU race defenses**, **automated quarantine shadowing with byte-exact rollback**, and a **sub-millisecond prefix cache**.
+**NL-OS-Agent** is a standalone, safety-verified natural language interface for Windows PowerShell, `cmd.exe`, and POSIX (`bash`/`zsh`) terminals. Powered by a context-distilled local language model (**NVIDIA Nemotron-3-Nano-4B Q4_K_M** via supervised `llama-server` without LM Studio), it pairs neural command synthesis with a **formal two-phase `propose()` / `commit()` pipeline**, **cross-shell AST static effect analysis**, **pre-execution TOCTOU verification**, **hardlink quarantine rollback**, **copy-on-write multi-step virtual overlays**, and a **PySide6 Desktop UI & Usability Study Suite**.
 
 ---
 
-## 1. Problem Statement & Novelty
+## 1. Core Architectural Pillars
 
-Commercial and open-source natural language terminal assistants typically suffer from four critical vulnerabilities:
-
-1. **Catastrophic Destructive Execution**: Models hallucinate destructive flags or misinterpret user intent, silently deleting directories or wiping disk structures (`rm -rf`, unintended truncations).
-2. **Time-Of-Check to Time-Of-Use (TOCTOU) Exploits**: Filesystem states can mutate between command proposal and execution (e.g. symlinks swapped, new target files created), turning a seemingly benign command into a system compromise.
-3. **Stealth Bypass of Shallow Regex Guards**: Simple verb denylists (G0) fail when destructive operations are disguised within search or pipeline utilities (e.g., `find . -name "*.log" -delete`, `tar --unlink-first`, base64 piping).
-4. **Unusable Interactive Latency**: Querying local 4B–8B parameter models per keystroke introduces 1,000–3,000 ms of latency, disrupting normal terminal workflow.
-
-### Architectural Innovations & Novelties in NL-OS-Agent:
-- **Two-Phase `propose()` $\to$ `commit()` Invariant**: The LLM *only* proposes commands; it is strictly isolated from execution. Commands are staged with a UUID, previewed, and only executed upon explicit user or policy confirmation.
-- **Pre-Execution TOCTOU Re-Analysis**: At the millisecond of `commit()`, the filesystem effect is dynamically re-analyzed. If the target directory changed or risk tier escalated since proposal time, execution is hard-blocked with return code `126`.
-- **Static Effect Engine & 5 Deterministic Risk Tiers**: Full AST/argument decomposition identifies creations, deletions, overwrites, permission changes, process signals, and protected system roots before execution.
-- **Automatic Pre-Execution Quarantine Shadowing & Byte-Exact Undo**: Every destructive deletion or overwrite is shadowed into `~/.nl-agent/quarantine/` via hardlinks/copies prior to disk modification. A single `nlctl undo` command restores files byte-for-byte with SHA-1 verification.
-- **3-Layer Prefix Cache ($L_0$ Static, $L_1$ Environment, $L_2$ State)**: Accelerates repeated and semantically similar operations from ~150 ms down to **0.3 ms (< 1 millisecond)** without calling the neural backend.
-
----
-
-## 2. System Architecture
-
-```mermaid
-flowchart TD
-    User([User Natural Language Instruction]) --> Propose["propose() Pipeline"]
-    
-    subgraph ProposeStage ["Proposal & Static Verification"]
-        Propose --> L0L1L2["3-Layer Prompt Layout\n(L0 System, L1 Env, L2 State)"]
-        L0L1L2 --> CacheLookup{"Verified Cache\nLookup"}
-        CacheLookup -- Hit (<1ms) --> CachedProp["Verified Proposal"]
-        CacheLookup -- Miss --> LLM["Local LLM Backend\n(Nemotron / llama-server)"]
-        LLM --> JSONValidate["Strict JSON Validation"]
-        JSONValidate --> StaticAnalyse["Static Effect Analyser\n(effects.py)"]
-        CachedProp --> StaticAnalyse
-        StaticAnalyse --> TierAssign["Risk Tier Assignment\nT0: Read-Only | T1: Modifying\nT2: Destructive | T3: Privileged\nT4: Ambiguous"]
-    end
-
-    TierAssign --> SQLiteStore[("Persistent State DB\n(~/.nl-agent/state.db)")]
-    SQLiteStore --> Preview["Console Preview & Risk Badge (stderr)"]
-    Preview --> UserReview{"Requires\nConfirmation?"}
-    
-    subgraph CommitStage ["Execution & Quarantine Pipeline"]
-        UserReview -- Confirmed / Auto --> Commit["commit() Pipeline"]
-        Commit --> TOCTOUCheck{"TOCTOU Re-Analysis\nDid state mutate?"}
-        TOCTOUCheck -- Escalated / Mutated --> Blocked["Hard Block (Exit 126)\nAborted"]
-        TOCTOUCheck -- Safe --> Quarantine["Quarantine Shadowing\n(Hardlink/Copy to ~/.nl-agent/quarantine/)"]
-        Quarantine --> ExecShell["OS Shell Runner\n(Bash / PowerShell)"]
-        ExecShell --> SuccessRecord["Record in Verified Cache\n& Update Session State"]
-    end
-    
-    subgraph RollbackEngine ["Rollback Engine"]
-        UndoCmd(["nlctl undo"]) --> RestoreQuarantine["Byte-Exact Restoration\nwith SHA-1 Hash Check"]
-        RestoreQuarantine --> RestoredState[("Filesystem Restored")]
-    end
-```
+1. **Two-Phase `propose()` $\to$ `commit()` Invariant** ([`propose.py`](src/nlagent/daemon/propose.py), [`commit.py`](src/nlagent/daemon/commit.py)):  
+   The LLM can *only* propose structured JSON payloads (`command`, `targets`, `explanation`, optional `clarifying_question`); it never invokes OS execution directly. `commit()` re-analyzes the live filesystem at the moment of execution to block **Time-Of-Check to Time-Of-Use (TOCTOU)** race mutations (`exit code 126`).
+2. **Cross-Shell Static Effect Engine & 5 Deterministic Risk Tiers** ([`effects.py`](src/nlagent/safety/effects.py), [`ps_parser.py`](src/nlagent/safety/ps_parser.py), [`cmd_parser.py`](src/nlagent/safety/cmd_parser.py)):  
+   Decomposes PowerShell cmdlets/pipelines, `cmd.exe` verbs/switches, and POSIX commands statically into `read_only`, `state_modifying`, `destructive`, `privileged`, and `ambiguous` tiers.
+3. **Plain-English Consequence Renderer & Cancel-Safe Default** ([`renderer.py`](src/nlagent/safety/renderer.py)):  
+   Converts technical AST effects into non-technical summaries (affected counts, byte sizes, directory scopes, wildcard warnings, and Quarantine reversibility status). Enforces **Cancel** as the default focused button/action for destructive, privileged, or ambiguous operations.
+4. **Shadow Quarantine & Byte-Exact Undo** ([`quarantine.py`](src/nlagent/safety/quarantine.py)):  
+   Automatically shadows deleted, overwritten, or appended files/directories into local quarantine before execution (`nlctl undo` restores byte-identical contents with SHA-1 verification).
+5. **Copy-on-Write Virtual Filesystem Overlay & Multi-Step Plans** ([`overlay.py`](src/nlagent/safety/overlay.py), [`plan/engine.py`](src/nlagent/plan/engine.py)):  
+   Supports up to 10-step workflows (`MAX_PLAN_STEPS = 10`) where step $k$'s effects and wildcards are simulated on the in-memory overlay of steps $1 \dots k-1$, compiling one combined preview and one transactional `UndoGroup` with automatic rollback on failure.
+6. **Grounding & Hostile Filename Injection (HFI) Sanitizer** ([`grounding.py`](src/nlagent/context/grounding.py), [`sanitize.py`](src/nlagent/context/sanitize.py), [`profile.py`](src/nlagent/context/profile.py)):  
+   Bounded, metadata-only file search injects real candidate paths while stripping control characters and delimiting untrusted filenames so disk names containing shell injection payloads cannot alter tiering or prompt instructions.
+7. **Standalone Runtime, Core Loopback Service & Desktop UI** ([`runtime/manager.py`](src/nlagent/runtime/manager.py), [`service/core.py`](src/nlagent/service/core.py), [`ui/app.py`](src/nlagent/ui/app.py)):  
+   Manages precompiled CUDA/Vulkan/CPU `llama-server.exe` binaries with GPU-to-CPU fallback, an install-time 90s autotuner ([`autotune.py`](src/nlagent/runtime/autotune.py)), an authenticated `127.0.0.1` HTTP daemon (`nlctl service start`), PySide6 Floating Preview Window, System Tray icon, First-Run Setup Wizard, air-gapped Usability Study Mode, and Windows Inno Setup packaging ([`setup.iss`](installer/setup.iss)).
 
 ---
 
-## 3. Risk Tier Classification Matrix
-
-Every proposed command is assigned one of five formal security risk tiers:
-
-| Tier | Classification | Criteria & Detection Mechanics | Execution Policy | Example Commands |
-| :---: | :--- | :--- | :--- | :--- |
-| **0** | `read_only` | Zero filesystem mutations, search queries, process inspections. | **Auto-run** (zero confirmation burden) | `ls`, `grep`, `find . -name "*.py"`, `git status`, `uptime` |
-| **1** | `state_modifying` | Additive mutations: creates new files, directories, appends content without deleting assets. | **Auto-run / Notify** | `touch file.txt`, `mkdir -p build/`, `echo 'log' >> app.log` |
-| **2** | `destructive` | Deletes files, removes directories, truncates assets, kills processes. | **Explicit Confirmation Required** + Quarantine Shadow | `rm -rf tmp/`, `unlink log.txt`, `shred secret.dat`, `> file.txt` |
-| **3** | `privileged` | Targets protected system paths (`/`, `/etc`, `/usr`, `C:\Windows`) or requests `sudo`. | **Hard-Blocked** (requires `--allow-privileged`) | `rm -rf /etc/hosts`, `sudo systemctl stop`, `chmod 777 /bin` |
-| **4** | `ambiguous` | Vague instructions with multiple matching targets or opaque subshells (`$(...)`, eval). | **Clarifying Question Gate** (execution halted) | `clean up the logs`, `delete the project files`, `eval $(...)` |
-
----
-
-## 4. Repository Structure
+## 2. Repository Structure
 
 ```text
 nl-os-agent/
-├── pyproject.toml                     # Package configuration & console script [project.scripts] nlctl
-├── README.md                          # Comprehensive project documentation & architecture guide
-├── Execution_Runbook.md               # End-to-end milestone execution runbook
-├── Next_Phases_Plan.md                # Research phases, dependency gates & evaluation roadmap
+├── README.md                          # Project overview, setup, live execution & verification guide
+├── pyproject.toml                     # Package config & nlctl / nlagent console entrypoints
+├── pytest.ini                         # Pytest configuration
+├── agent.py                           # Interactive Rich shell agent demo (Propose / Commit REPL)
+├── nlctl.cmd / nlagent.cmd            # Windows CLI wrappers
 │
 ├── src/nlagent/                       # Core Python package
-│   ├── cli/                           # Unified CLI interface
-│   │   ├── main.py                    # Subcommands: propose, commit, undo, history
-│   │   └── db.py                      # Persistent SQLite state database (~/.nl-agent/state.db)
-│   ├── daemon/                        # Core execution daemon
-│   │   ├── propose.py                 # Safe proposal pipeline & JSON extraction
-│   │   └── commit.py                  # TOCTOU re-check, quarantine shadowing & execution
-│   ├── safety/                        # Deterministic safety engines
-│   │   ├── effects.py                 # Static effect analyser & 5 risk tiers
-│   │   ├── quarantine.py              # Pre-execution shadowing, byte-exact undo, 500 MB limit
-│   │   ├── manifest.py                # Filesystem snapshot manifest & diffing
-│   │   └── baseline_g1.py             # Baseline regex & denylist safety guards
-│   ├── cache/                         # Multi-tier caching
-│   │   ├── verified_cache.py          # Semantic cosine similarity verified-command cache
-│   │   └── prefix_cache.py            # Exact L0+L1 prefix cache manager
-│   ├── context/                       # Session state & prompt layouts
-│   │   ├── layout.py                  # L0 (static), L1 (environment), L2 (state) prompt builder
-│   │   └── state.py                   # Multi-turn entity resolution & CWD tracker
-│   ├── backends/                      # LLM runtime integrations
-│   │   └── llama_server.py            # llama-server / LM Studio client with reasoning tag stripper
-│   ├── bench/                         # Academic benchmarking harnesses
-│   │   ├── e0.py                      # Experiment E0: Uncached vs Cached output equality gate
-│   │   └── provenance.py              # Git SHA, GPU, and system provenance logger
-│   └── eval/                          # Formal execution evaluators
-│       └── exec_eval.py               # Sandboxed candidate vs reference manifest evaluator
+│   ├── cli/                           # CLI (propose, commit, undo, history, doctor, service) & SQLite store
+│   ├── service/                       # Authenticated loopback HTTP daemon & fallback client
+│   ├── runtime/                       # Hardware detection, llama-server manager, model store & autotuner
+│   ├── backends/                      # OpenAI/llama-server client with chat template & prompt cache support
+│   ├── daemon/                        # Two-stage propose() & commit() execution pipelines
+│   ├── safety/                        # Effect analyser, PowerShell/cmd AST parsers, renderer, overlay & quarantine
+│   ├── plan/                          # Up-to-10-step multi-step plan engine & atomic UndoGroup
+│   ├── context/                       # 3-layer L0/L1/L2 prompt layout, grounding, profile & HFI sanitizer
+│   ├── cache/                         # Prefix cache & semantic verified-command cache
+│   ├── ui/                            # PySide6 tray, floating preview, wizard, consent & study logger
+│   ├── bench/                         # Provenance validator, stats (Wilson/McNemar/Clopper-Pearson) & E0 harness
+│   └── eval/                          # Sandboxed manifest comparison execution evaluator
 │
-├── shell/                             # Native terminal keybinding hooks
-│   ├── nl-bind.bash                   # Bash hook (Ctrl+G places eval commit wrapper)
-│   └── nl-bind.ps1                    # PowerShell PSReadLine hook (Ctrl+G integration)
-│
-├── datasets/                          # Sealed test suites and attack datasets
-│   ├── benign_commands.jsonl          # 15 real-world developer benign commands
-│   ├── safety_bench_v2_attacks.jsonl  # 15 blind adversarial evasion attacks
-│   └── sealed_test.jsonl              # 32 sealed test cases for 2x2 factorial evaluation
-│
-├── results/                           # Generated benchmark tables and empirical outputs
-│   ├── e5_matrix.md                   # 2x2 Factorial Matrix: Base vs Tuned x Full vs Short
-│   ├── e5_matrix.jsonl                # Raw trial data with Wilson CIs & McNemar p-values
-│   ├── safety_v2_summary.md           # Safety Benchmark v2: G0 vs G1 vs G2 vs G3
-│   ├── safety_v2.jsonl                # Guard evaluation records with Clopper-Pearson CIs
-│   ├── latency_breakdown.md           # Latency breakdown: Uncached vs Prefix Cached TTFT
-│   └── dataset_audit.md               # Training dataset leakage & balance audit report
-│
-├── scripts/                           # Reproducible benchmark and demonstration runners
-│   ├── demo.py                        # Interactive / automated 3-minute acceptance walkthrough
-│   ├── run_e5.py                      # 2x2 factorial evaluation matrix runner (Exp E5)
-│   ├── run_safety_bench_v2.py         # 5-guard safety benchmark evaluator (T15)
-│   ├── run_breakdown.py               # Real-hardware latency breakdown profiler
-│   ├── audit_dataset.py               # Dataset audit & token distribution inspector
-│   └── fix_nemotron_gguf.py           # Hybrid Nemotron Mamba-2/Transformer GGUF tensor fixer
-│
-└── tests/                             # Comprehensive unit & acceptance test suites
-    ├── test_e2e.py                    # Complete 7-stage end-to-end integration test
-    ├── test_cli.py                    # Subprocess nlctl CLI & invariant tests
-    ├── test_toctou.py                 # TOCTOU mutation race condition proof tests
-    ├── test_quarantine.py             # Shadowing, byte-exact rollback & 500 MB limit tests
-    ├── test_safety_bench_v2.py        # Safety benchmark v2 validation tests
-    ├── test_run_e5.py                 # E5 matrix evaluator unit tests
-    ├── test_exec_eval.py              # Sandboxed execution manifest evaluator tests
-    ├── test_reasoning_breakdown.py    # Latency breakdown profiler tests
-    └── test_audit_dataset.py          # Dataset audit validation tests
+├── shell/                             # Native terminal Ctrl+G bindings (nl-bind.ps1, nl-bind.bash)
+├── models/                            # GGUF manifest & license notice (local weights stored untracked)
+├── installer/                         # Windows Inno Setup installer script (setup.iss)
+├── datasets/                          # Dev, attack, and sealed benchmark partitions
+├── results/                           # Authenticated evaluation JSONL outputs & Markdown summaries
+├── docs/                              # Evidence ledger (docs/evidence_ledger.md) & milestone status docs
+├── paper/                             # Academic LaTeX draft (paper/main.tex)
+├── vault/                             # Structured provenance memory vault & wiki logs
+├── experiments/loops/                 # Autonomous prompt/runtime optimization loop contracts
+├── scripts/                           # Benchmarks, figure generators, paper numbers gate & vault linter
+├── tests/                             # 398-test automated pytest suite
+└── Ref_docs/                          # Archived planning, handover, slide, report & testing reference docs
 ```
 
 ---
 
-## 5. Installation & Setup
+## 3. Standalone Installation & Live Setup (No LM Studio Needed)
 
-### Requirements
-- Python 3.10 or higher
-- Git
-- Local LLM server (Optional for demo/tests; runs with deterministic offline mock by default):
-  - [LM Studio](https://lmstudio.ai/) or `llama-server` loaded with NVIDIA Nemotron 3 Nano / LLaMA-3.
-
-### Quickstart
-```bash
-# 1. Clone the repository
-git clone https://github.com/Siva-0317/nl-os-agent.git
-cd nl-os-agent
-
-# 2. Create and activate a virtual environment
-python -m venv .venv
-
-# On Linux / macOS:
-source .venv/bin/activate
-# On Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-
-# 3. Install in editable development mode
+### Step 1: Install the Package in Editable Mode
+Requires Python 3.10+ (verified on Python 3.11.9 / Windows 11):
+```powershell
 pip install -e .
 ```
+*(If PySide6/UI or ML evaluation scripts are used, ensure `PySide6`, `requests`, `rich`, `numpy`, and `scikit-learn` are available in your environment.)*
 
----
+### Step 2: Provide Standalone `llama-server.exe` + GGUF Weights
+1. Download the official Windows release archive matching your GPU/CPU (`llama-*-bin-win-cuda-12.x-x64.zip` and `cudart-llama-*-bin-win-cuda-12.x-x64.zip` for NVIDIA CUDA, or Vulkan/CPU builds) from [ggml-org/llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases), and extract them into `bin\` (creating `bin\llama-server.exe`).
+2. Place your quantized dense GGUF model (e.g., `NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf`) in `models\`.  
+   *(If converting directly from an Unsloth export hitting `blk.1.ssm_in.weight`, repair metadata once with `python scripts/fix_nemotron_gguf.py --input <raw.gguf> --output models/NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf`.)*
+3. Verify hardware detection, binary resolution, and model integrity:
+   ```powershell
+   nlctl doctor --model "models/NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf"
+   ```
 
-## 6. CLI Usage Guide (`nlctl`)
-
-The `nlctl` console script provides direct access to the two-phase proposal, execution, and rollback engines:
-
-### 1. Propose a Command
-Generates a safe command, evaluates risk tier, displays preview on `stderr`, and persists proposal to SQLite:
-```bash
-nlctl propose "delete all stale log files in logs directory"
-```
-```text
-[DESTRUCTIVE] rm -f logs/old.log
-DELETE 1 item(s) (~0.0 MB), e.g. ['/path/to/logs/old.log']
-Proposal ID: p_4f89a1c2
-```
-
-### 2. Commit and Execute
-Executes TOCTOU re-check, shadows deleted assets to quarantine, and executes safely:
-```bash
-nlctl commit p_4f89a1c2
-```
-
-### 3. Undo / Rollback
-Instantly restores files deleted or overwritten by a proposal byte-identically:
-```bash
-nlctl undo p_4f89a1c2
-```
-```text
-Undo successful for proposal p_4f89a1c2.
-Restored: /path/to/logs/old.log
-```
-
-### 4. Audit History
-Inspect all past proposals, execution return codes, and statuses:
-```bash
-nlctl history
-```
-
----
-
-## 7. Native Terminal Integration (Hotkeys)
-
-Integrate natural language directly into your favorite interactive shell:
-
-### Bash Hook (`Ctrl+G`)
-Add the following line to your `~/.bashrc`:
-```bash
-source /path/to/nl-os-agent/shell/nl-bind.bash
-```
-Type any natural language query and press `Ctrl+G`. The terminal will render risk badges and preview on `stderr`, and place `eval "$(nlctl commit <id> --emit-shell)"` on your command line buffer for review.
-
-### PowerShell Hook (`Ctrl+G`)
-Add the following line to your PowerShell `$PROFILE`:
+### Step 3: Start `llama-server` & Launch NL-OS-Agent
+**Terminal 1** (keep running as the inference backend):
 ```powershell
-. "D:\Final yr Proj\shell\nl-bind.ps1"
+.\bin\llama-server.exe -m "models\NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf" --host 127.0.0.1 --port 8080 -ngl 33 -c 2048 -t 4
 ```
-Type your instruction and press `Ctrl+G` to automatically invoke proposal and replace the buffer with the safe commit command.
+*(Note: Do **not** type shell requests into the browser page at `http://127.0.0.1:8080/` — that is llama.cpp's raw model chat page. Use any of the NL-OS-Agent clients in Terminal 2 below.)*
 
----
+**Terminal 2** (launch any NL-OS-Agent client; set `$env:NLAGENT_REASONING = "0"` for fast single-pass inference):
+```powershell
+$env:NLAGENT_REASONING = "0"
 
-## 8. Empirical Benchmark Results
+# 1. Interactive Terminal REPL Demo
+python agent.py
 
-### 1. Safety Benchmark v2 (Guards G0–G3 across 15 Adversarial & 15 Benign Cases)
-Full evaluation report available at [`results/safety_v2_summary.md`](file:///d:/Final%20yr%20Proj/results/safety_v2_summary.md):
+# 2. Guided 7-Stage Acceptance Walkthrough (Read-only, Create, Ambiguous, Destructive, Undo, Blocked, Cache)
+python scripts/demo.py
 
-| Guard | Mechanism | Adversarial Bypass Rate (95% CI) | Benign Confirmation Burden (per 100) |
-| :--- | :--- | :---: | :---: |
-| **G0-simple** | Naive verb denylist regex (`rm`, `kill`, `dd`) | 73.3% [44.9%, 92.2%] | 26.7 / 100 |
-| **G0-published**| Open-source agent published denylist patterns | 53.3% [26.6%, 78.7%] | 26.7 / 100 |
-| **G1** | Static heuristic classifier with verb rules | 20.0% [4.3%, 48.1%] | 20.0 / 100 |
-| **G2-metrics** | Baseline passive OS sandbox | 100.0% [78.2%, 100.0%] *(no interception)* | 0.0 / 100 |
-| **G3 (Ours)** | **Static Effect Engine + TOCTOU + Quarantine** | **0.0% [0.0%, 21.8%]** | **13.3 / 100** |
+# 3. CLI Subcommands (inside any sandbox workspace)
+nlctl propose "list python files in src"
+nlctl commit <proposal_id>
+nlctl undo <proposal_id>
+nlctl history
 
-*G3 completely eliminated adversarial evasion attacks while achieving the lowest confirmation burden on benign queries.*
+# 4. Desktop PySide6 UI, Setup Wizard & Usability Study Mode
+python -m nlagent.ui.app --propose "show all hidden files in current folder"
+python -m nlagent.ui.app --wizard
+python -m nlagent.ui.app --study
+python -m nlagent.ui.app
 
-### 2. 2x2 Factorial Matrix: Base vs Tuned $\times$ Full vs Short Prompts (Exp E5)
-Full evaluation report available at [`results/e5_matrix.md`](file:///d:/Final%20yr%20Proj/results/e5_matrix.md):
-
-| Condition | Prompt Tokens | Accuracy (%) | 95% Wilson CI | Mean Latency (TTFT) |
-| :--- | :---: | :---: | :---: | :---: |
-| **Base + Full Prompt** | ~520 | 75.0% | [40.9%, 92.8%] | 120.0 ms |
-| **Base + Short Prompt** | ~110 | 37.5% | [13.7%, 69.4%] | 25.0 ms |
-| **Tuned + Full Prompt** | ~520 | 75.0% | [40.9%, 92.8%] | 120.0 ms |
-| **Tuned + Short Prompt**| **~110** | **75.0%** | **[40.9%, 92.8%]** | **25.0 ms** |
-
-*Context distillation allows the fine-tuned model to maintain 75% accuracy with a 79% reduction in prompt tokens and a 4.8x TTFT latency speedup.*
-
----
-
-## 9. Running the 3-Minute Acceptance Demo
-
-Run the interactive or automated end-to-end walkthrough demonstrating all 7 core stages:
-```bash
-# Automated run (screencast / test mode):
-python scripts/demo.py --auto --mock
-
-# Interactive walkthrough:
-python scripts/demo.py --mock
+# 5. Inline Shell Hotkey (Ctrl+G in PowerShell or Bash)
+. "shell\nl-bind.ps1"      # Windows PowerShell
+# source shell/nl-bind.bash  # Linux / macOS
 ```
 
 ---
 
-## 10. Verification Test Suite
+## 4. Key Sealed & Empirical Benchmark Highlights
 
-Run the full suite of 39 unit and integration tests:
-```bash
-# Run all tests via Python unittest:
-python -m unittest discover -s tests -p "test_*.py"
+All reported metrics are provenance-tracked in [`docs/evidence_ledger.md`](docs/evidence_ledger.md) and gated against drift via `python scripts/gate_paper_numbers.py`:
 
-# Or run individual test modules:
-python tests/test_e2e.py            # End-to-end 7-stage workflow
-python tests/test_cli.py            # CLI invariants & shell hooks
-python tests/test_toctou.py         # TOCTOU mutation race proofs
-python tests/test_quarantine.py     # Quarantine shadowing & undo
-python tests/test_safety_bench_v2.py# G0-G3 safety benchmark
-python tests/test_run_e5.py         # 2x2 matrix evaluation tests
-```
-All 39 unit and acceptance tests execute strictly in temporary isolated directories.
+- **Sealed E5 Prompt Compression Evaluation** ([`results/sealed_final_summary.md`](results/sealed_final_summary.md)):
+  - **Tuned + Short Prompt**: **94.0%** execution accuracy (95% Wilson CI: `[83.8%, 97.9%]`), **100.0%** JSON schema validity, **100.0%** clarification accuracy, and **24.6 ms** mean TTFT (**5.0x speedup** vs. 122.3 ms full prompt).
+  - **Base + Short Prompt**: **32.0%** execution accuracy (`p < 10^-6` exact McNemar test vs. Tuned + Short).
+- **Sealed Safety Guard Robustness (`safety_v3_sealed.jsonl`, N=100)** ([`results/sealed_final_summary.md`](results/sealed_final_summary.md)):
+  - **Combined G0–G3 Defense Pipeline**: **98.3%** harmful evasion interception (95% Clopper-Pearson CI: `[91.1%, 100.0%]`) across multi-stage PowerShell, `cmd.exe`, and Bash attacks (vs. **40.0%** on naive G0-simple regex).
+- **Cross-Tier Hardware Matrix** ([`results/hardware_matrix_summary.md`](results/hardware_matrix_summary.md)):
+  - Offloading 33/33 layers on NVIDIA GeForce RTX 2050 CUDA achieves **25.4 ms** median TTFT (**4.7x** vs. CPU baseline).
 
 ---
 
-## 11. License
+## 5. Verification & Integrity Checks
 
-Distributed under the MIT License. See `LICENSE` for details.
+Run the complete test suite, vault integrity linter, and paper numbers concordance gate locally inside isolated temporary directories:
+```powershell
+# Run full test suite (398 passed, 1 skipped)
+python -m pytest tests/ -q
+
+# Verify Dev Vault links & ledger provenance rules (0 violations)
+python scripts/vault_lint.py
+
+# Verify 100% numeric concordance across docs, paper & ledger (121/121 verified, 0 violations)
+python scripts/gate_paper_numbers.py
+```
+
+For detailed task specifications, experimental designs, and additional CLI usage examples, see [`Ref_docs/`](Ref_docs/) (including [`TESTING_GUIDE.md`](Ref_docs/TESTING_GUIDE.md) and [`EXECUTION_ROADMAP_AND_PROMPTS.md`](Ref_docs/EXECUTION_ROADMAP_AND_PROMPTS.md)).
+
+---
+
+## License
+
+MIT License. Model weights are governed by their upstream license (`models/NOTICE`).

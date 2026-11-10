@@ -31,6 +31,20 @@ def main():
     user_request = sys.argv[1].strip()
     cwd = sys.argv[2] if len(sys.argv) > 2 and os.path.isdir(sys.argv[2]) else os.getcwd()
 
+    # Try querying background service first to eliminate process startup latency
+    try:
+        from nlagent.service.core import ServiceClient
+        client = ServiceClient()
+        if client.is_service_running():
+            res = client.propose(request=user_request, cwd=cwd)
+            cmd = res.get("command", "").strip()
+            if cmd:
+                sys.stdout.write(cmd)
+                sys.stdout.flush()
+                return
+    except Exception:
+        pass
+
     session = SessionState(cwd=cwd)
     cache = VerifiedCommandCache(threshold=0.88)
     backend = LlamaServerBackend(endpoint_url=resolve_local_endpoint())

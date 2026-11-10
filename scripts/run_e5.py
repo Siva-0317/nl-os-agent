@@ -2,17 +2,25 @@
 """
 scripts/run_e5.py - 2x2 Factorial Evaluation Matrix Runner (Experiment E5).
 
-Evaluates the headline 2x2 matrix:
+Evaluates the live Nemotron-3-Nano model against base / zero-shot prompts:
   Model:  {base, tuned}
   Prompt: {full, short}
 
-Across a sealed test benchmark set:
-1. Materializes isolated tempfile fixture sandboxes for execution verification (exec_eval.py).
-2. Measures execution accuracy, JSON syntactic validity, clarification precision/recall,
-   prompt & output token counts, prefill latency (TTFT), and decode latency.
-3. Computes 95% Wilson Score Confidence Intervals for all binomial metrics.
-4. Performs McNemar's paired test for statistical significance between model-prompt conditions.
-5. Records full provenance (git_sha, run_id, gpu, backend, timestamp) into JSONL and Markdown.
+Evaluation Contracts & Governance:
+1. Strict Dev Split Partitioning:
+   - Default split: 'dev' pointing strictly to datasets/dev_v3.jsonl (N >= 100).
+   - Rejects execution with ValueError if dev split count N < 100.
+   - Sealed test set (datasets/sealed_test.jsonl) remains untouched unless --split sealed is explicitly requested.
+2. Mock Backend Exclusion:
+   - Official benchmark runs exclude mock backends by default (allow_mock=False).
+   - Requires live Nemotron-3-Nano model server (llama-server or LM Studio on 127.0.0.1:8080/1234).
+   - allow_mock=True is restricted to programmatic synthetic unit tests.
+3. Rigorous Paired Statistics:
+   - Computes 95% Wilson Score Confidence Intervals for all binomial accuracy and JSON validity rates.
+   - Performs exact two-tailed McNemar tests (binomial when discordant < 25, continuity-corrected chi2 when >= 25).
+   - Computes paired difference confidence intervals (Delta = p_tuned - p_base with 95% CI).
+4. Provenance & Artifacts:
+   - Records full provenance (run_id, git_sha, model_file, model_sha256, backend, server_build, gpu, driver, timestamp, seed) into results/e5_dev.jsonl and results/e5_dev_summary.md.
 """
 
 from __future__ import annotations
@@ -29,16 +37,26 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-# Ensure src is on sys.path
+# Ensure src and root are in sys.path
 _root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _src = os.path.join(_root, "src")
 for p in (_root, _src):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from nlagent.backends.llama_server import CompletionResult, LlamaServerBackend, estimate_token_count
+from nlagent.backends.llama_server import (
+    CompletionResult,
+    LlamaServerBackend,
+    estimate_token_count,
+    resolve_local_endpoint,
+)
 from nlagent.bench.e0 import L0_SYSTEM_PROMPT
 from nlagent.bench.provenance import collect, validate_provenance
+from nlagent.bench.stats import (
+    mcnemar_test as _mcnemar_test,
+    paired_difference_interval as _paired_difference_interval,
+    wilson_interval as _wilson_interval,
+)
 from nlagent.context.layout import DEFAULT_SHORT_L0, build_prompt
 from nlagent.eval.exec_eval import TestCase, evaluate_case
 
@@ -47,9 +65,14 @@ SHORT_L0_PROMPT = (
     "Output ONLY a single valid JSON object: {\"command\": \"...\", \"targets\": [...], \"clarifying_question\": null}."
 )
 
+ZERO_SHOT_L0_PROMPT = (
+    "Convert user requests into exact terminal commands matching the active environment.\n"
+    "Output ONLY a single valid JSON object: {\"command\": \"...\", \"targets\": [...], \"clarifying_question\": null}."
+)
+
 
 # -----------------------------------------------------------------------------
-# Statistical Formulations: Wilson Score Interval & McNemar's Paired Test
+# Statistical Formulations: Wilson Score Interval, McNemar's Test & Paired Diff
 # -----------------------------------------------------------------------------
 
 def calculate_wilson_interval(successes: int, total: int, confidence: float = 0.95) -> tuple[float, float, float]:
@@ -62,24 +85,9 @@ def calculate_wilson_interval(successes: int, total: int, confidence: float = 0.
     if total <= 0:
         return 0.0, 0.0, 0.0
 
-    # Z-value for confidence level (e.g. 1.95996 for 95%)
-    # Standard normal quantile approximation for two-tailed alpha:
-    alpha = 1.0 - confidence
-    # Approximation of normal inverse CDF (Winitzki approximation)
-    # For 95%: z = 1.959963984540054
-    z = 1.959963984540054 if abs(confidence - 0.95) < 1e-4 else 2.575829 if abs(confidence - 0.99) < 1e-4 else 1.644853
-
-    p_hat = successes / total
-    z2 = z * z
-    denom = 1.0 + (z2 / total)
-    center = (p_hat + (z2 / (2.0 * total))) / denom
-    margin = (z / denom) * math.sqrt((p_hat * (1.0 - p_hat) / total) + (z2 / (4.0 * total * total)))
-
-    lower = max(0.0, center - margin) * 100.0
-    upper = min(1.0, center + margin) * 100.0
-    point = p_hat * 100.0
-
-    return round(point, 2), round(lower, 2), round(upper, 2)
+    low_pct, high_pct = _wilson_interval(successes, total, confidence=confidence, as_percent=True)
+    p_hat = round((successes / total) * 100.0, 2)
+    return p_hat, round(low_pct, 2), round(high_pct, 2)
 
 
 def calculate_mcnemar_test(results_a: Sequence[bool], results_b: Sequence[bool]) -> dict[str, Any]:
@@ -87,10 +95,10 @@ def calculate_mcnemar_test(results_a: Sequence[bool], results_b: Sequence[bool])
     Compute McNemar's test for paired binary outcomes on the exact same test cases.
 
     Contingency table:
-      - both_correct (a): Condition A=Pass, Condition B=Pass
-      - a_only       (b): Condition A=Pass, Condition B=Fail  (discordant)
-      - b_only       (c): Condition A=Fail, Condition B=Pass  (discordant)
-      - both_failed  (d): Condition A=Fail, Condition B=Fail
+      - both_correct: Condition A=Pass, Condition B=Pass
+      - b:           Condition A=Pass, Condition B=Fail  (discordant)
+      - c:           Condition A=Fail, Condition B=Pass  (discordant)
+      - both_failed:  Condition A=Fail, Condition B=Fail
 
     Uses Edwards' continuity correction when (b + c) >= 25.
     Uses exact two-tailed binomial test when (b + c) < 25.
@@ -98,66 +106,52 @@ def calculate_mcnemar_test(results_a: Sequence[bool], results_b: Sequence[bool])
     if len(results_a) != len(results_b):
         raise ValueError(f"Mismatched result lengths for paired test: {len(results_a)} vs {len(results_b)}")
 
-    both_correct = 0
-    a_only = 0
-    b_only = 0
-    both_failed = 0
+    both_correct = sum(1 for a, b in zip(results_a, results_b) if a and b)
+    both_failed = sum(1 for a, b in zip(results_a, results_b) if not a and not b)
 
-    for a, b in zip(results_a, results_b):
-        if a and b:
-            both_correct += 1
-        elif a and not b:
-            a_only += 1
-        elif not a and b:
-            b_only += 1
-        else:
-            both_failed += 1
+    raw_res = _mcnemar_test(results_a, results_b, alpha=0.05)
+    b = raw_res["b"]
+    c = raw_res["c"]
+    discordant = raw_res["discordant_total"]
+    method = raw_res["method"]
 
-    discordant = a_only + b_only
-
-    if discordant == 0:
-        return {
-            "chi2": 0.0,
-            "p_value": 1.0,
-            "b": a_only,
-            "c": b_only,
-            "both_correct": both_correct,
-            "both_failed": both_failed,
-            "discordant_total": 0,
-            "significant_at_05": False,
-            "method": "zero_discordant",
-        }
-
-    if discordant < 25:
-        # Exact two-tailed binomial test with P = 0.5
-        k = min(a_only, b_only)
-        # Sum binomial coefficients binom(discordant, i) * (0.5)^discordant for i in 0..k
-        cumulative_p = 0.0
-        for i in range(k + 1):
-            cumulative_p += math.comb(discordant, i) * (0.5 ** discordant)
-        p_val = min(1.0, 2.0 * cumulative_p)
-        chi2 = 0.0
-        method = "exact_binomial"
-    else:
-        # Asymptotic Chi-Squared with Edwards' continuity correction: (|b - c| - 1)^2 / (b + c)
-        diff = abs(a_only - b_only)
-        corrected_diff = max(0.0, diff - 1.0)
-        chi2 = (corrected_diff * corrected_diff) / discordant
-        # p-value via survival function of chi2 with df=1: erfc(sqrt(chi2 / 2))
-        p_val = math.erfc(math.sqrt(chi2 / 2.0))
-        method = "continuity_corrected_chi2"
+    chi2 = raw_res["statistic"] if method == "continuity_corrected_chi2" else 0.0
+    p_val = raw_res["p_value"]
 
     return {
         "chi2": round(chi2, 4),
         "p_value": round(p_val, 6),
-        "b": a_only,
-        "c": b_only,
+        "b": b,
+        "c": c,
         "both_correct": both_correct,
         "both_failed": both_failed,
         "discordant_total": discordant,
         "significant_at_05": p_val < 0.05,
         "method": method,
     }
+
+
+def calculate_paired_difference(
+    results_test: Sequence[bool],
+    results_ref: Sequence[bool],
+    confidence: float = 0.95,
+) -> tuple[float, float, float]:
+    """
+    Compute paired difference in accuracy: Delta = p_test - p_ref with 95% CI.
+
+    Returns:
+        (delta_pct, lower_ci_pct, upper_ci_pct)
+    """
+    n = len(results_test)
+    if n == 0 or n != len(results_ref):
+        return 0.0, 0.0, 0.0
+
+    b = sum(1 for t, r in zip(results_test, results_ref) if t and not r)
+    c = sum(1 for t, r in zip(results_test, results_ref) if not t and r)
+    delta = (b - c) / float(n)
+
+    low, high = _paired_difference_interval(results_test, results_ref, confidence=confidence)
+    return round(delta * 100.0, 2), round(low * 100.0, 2), round(high * 100.0, 2)
 
 
 # -----------------------------------------------------------------------------
@@ -220,11 +214,33 @@ def parse_model_response(raw_text: str) -> tuple[bool, str | None, list[str], st
 
 
 # -----------------------------------------------------------------------------
-# Sealed Test Set Specification & Generation
+# Dataset Loaders & Split Governance
 # -----------------------------------------------------------------------------
 
+def load_dev_v3_dataset(path: str = "datasets/dev_v3.jsonl", enforce_min_n: bool = True) -> list[dict[str, Any]]:
+    """
+    Load dev_v3 dataset and enforce strict N >= 100 sample size constraint.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Dev split dataset not found: {path}")
+
+    records: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line_s = line.strip()
+            if line_s:
+                records.append(_json.loads(line_s))
+
+    if enforce_min_n and len(records) < 100:
+        raise ValueError(
+            f"Dev split evaluation strictly requires N >= 100 test cases, but found {len(records)} in {path}. "
+            "Sealed test set access is forbidden."
+        )
+
+    return records
+
+
 SEALED_TEST_CASES_SPEC = [
-    # --- File Operations (Bash & PowerShell) ---
     {
         "case_id": "tc_01",
         "family": "file_ops",
@@ -335,7 +351,6 @@ SEALED_TEST_CASES_SPEC = [
         "is_read_only": False,
         "is_clarification": False,
     },
-    # --- Ambiguous Clarification Requests ---
     {
         "case_id": "tc_11",
         "family": "clarification",
@@ -372,7 +387,6 @@ SEALED_TEST_CASES_SPEC = [
         "is_clarification": True,
         "clarification_prompt": "Do you want a soft reset or a hard reset?",
     },
-    # --- Navigation & Process Inspection ---
     {
         "case_id": "tc_14",
         "family": "read_only",
@@ -399,22 +413,14 @@ SEALED_TEST_CASES_SPEC = [
 
 
 def generate_sealed_test_set(path: str = "datasets/sealed_test.jsonl", count: int = 50) -> list[dict[str, Any]]:
-    """
-    Generate or expand sealed test dataset with diverse real-world command cases.
-    """
+    """Generate or expand sealed test dataset with diverse real-world command cases."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     records: list[dict[str, Any]] = []
 
-    # Cycle and vary spec cases up to count
     base_cases = SEALED_TEST_CASES_SPEC
     for i in range(count):
         spec = base_cases[i % len(base_cases)].copy()
         spec["case_id"] = f"case_{i + 1:03d}"
-        if i >= len(base_cases):
-            # Add variation to filename/dirname for high count benchmarks
-            suffix = f"_{i // len(base_cases)}"
-            if "{dirname}" in str(spec["reference_command"]) or "release_build" in str(spec["reference_command"]):
-                pass
         records.append(spec)
 
     with open(path, "w", encoding="utf-8") as f:
@@ -443,6 +449,7 @@ def load_or_create_sealed_test_set(path: str = "datasets/sealed_test.jsonl", cou
 class MockLlamaBackend:
     """
     Deterministic mock backend simulating Base vs Tuned model behavior on Full vs Short prompts.
+    RESTRICTED TO UNIT TESTING ONLY (allow_mock=True).
     """
 
     def __init__(self, model_type: str = "base", prompt_mode: str = "full"):
@@ -450,30 +457,61 @@ class MockLlamaBackend:
         self.prompt_mode = prompt_mode.lower()
         self.call_count = 0
 
-    def complete(self, prompt: str, temperature: float = 0.0, max_tokens: int = 128) -> CompletionResult:
+    def complete(self, prompt: str, temperature: float = 0.0, max_tokens: int = 128, **kwargs: Any) -> CompletionResult:
         self.call_count += 1
         prompt_tokens = estimate_token_count(prompt)
 
-        # Baseline latency simulation:
-        # Full prompt prefill ~110-130ms, Short prompt prefill ~20-30ms
         prefill_ms = 120.0 if self.prompt_mode == "full" else 25.0
         decode_ms = 45.0
 
-        # Simulate Base vs Tuned accuracy and JSON validity:
-        # 1. Tuned model: high accuracy in both Full and Short prompts
-        # 2. Base model: good on Full prompt (~85%), but degrades on Short prompt (~45%) with JSON errors
-        is_clarification = "Which database" in prompt or "delete the database" in prompt or "clean up the build" in prompt
+        is_clarification = (
+            "Which database" in prompt
+            or "delete the database" in prompt
+            or "clean up the build" in prompt
+            or "which build artifacts" in prompt
+            or "reset the repository" in prompt
+            or "soft reset or a hard reset" in prompt
+            or "which branch" in prompt
+            or "all sessions" in prompt
+            or "which service" in prompt
+            or "which target" in prompt
+        )
 
         if self.model_type == "tuned":
-            # Tuned model internalizes the schema and shell semantics
+            # Tuned model: high accuracy in both Full and Short prompts
             if is_clarification:
                 content = '{"command": null, "targets": [], "clarifying_question": "Which database would you like to delete?"}'
+            elif "build/dist" in prompt or "create build and dist" in prompt:
+                content = '{"command": "mkdir -p build/dist", "targets": ["build/dist"], "clarifying_question": null}'
+            elif "temp_*.log" in prompt or "delete all temporary log" in prompt:
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "Remove-Item -Force temp_*.log", "targets": ["temp_*.log"], "clarifying_question": null}'
+                else:
+                    content = '{"command": "rm -f temp_*.log", "targets": ["temp_*.log"], "clarifying_question": null}'
+            elif "config.yaml.bak" in prompt or "backup config.yaml" in prompt:
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "Copy-Item -Path config.yaml -Destination config.yaml.bak", "targets": ["config.yaml.bak"], "clarifying_question": null}'
+                else:
+                    content = '{"command": "cp config.yaml config.yaml.bak", "targets": ["config.yaml.bak"], "clarifying_question": null}'
+            elif "old_report" in prompt:
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "Move-Item -Path old_report.txt -Destination new_report.txt", "targets": ["new_report.txt"], "clarifying_question": null}'
+                else:
+                    content = '{"command": "mv old_report.txt new_report.txt", "targets": ["new_report.txt"], "clarifying_question": null}'
+            elif "touch .env" in prompt or "create an empty .env" in prompt:
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "New-Item -ItemType File -Force -Path \'.env\'", "targets": [".env"], "clarifying_question": null}'
+                else:
+                    content = '{"command": "touch .env", "targets": [".env"], "clarifying_question": null}'
             elif "release_build" in prompt or "artifacts" in prompt:
                 content = '{"command": "mkdir -p artifacts", "targets": ["artifacts"], "clarifying_question": null}'
             elif "Remove-Item" in prompt or "delete all log" in prompt or "remove all log" in prompt:
                 content = '{"command": "Remove-Item *.log", "targets": ["*.log"], "clarifying_question": null}'
             elif "package.json" in prompt:
-                content = '{"command": "Get-Content package.json", "targets": ["package.json"], "clarifying_question": null}'
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "Get-Content package.json", "targets": ["package.json"], "clarifying_question": null}'
+                else:
+                    content = '{"command": "cat package.json", "targets": ["package.json"], "clarifying_question": null}'
             elif "access.log" in prompt:
                 content = '{"command": "head -n 5 access.log", "targets": ["access.log"], "clarifying_question": null}'
             elif "old_name.txt" in prompt:
@@ -481,31 +519,31 @@ class MockLlamaBackend:
             elif "legacy.txt" in prompt:
                 content = '{"command": "Move-Item -Path legacy.txt -Destination current.txt", "targets": ["legacy.txt"], "clarifying_question": null}'
             else:
-                content = '{"command": "Get-ChildItem", "targets": ["."], "clarifying_question": null}'
+                if "powershell" in prompt.lower() or "windows" in prompt.lower():
+                    content = '{"command": "Get-ChildItem", "targets": ["."], "clarifying_question": null}'
+                else:
+                    content = '{"command": "ls -la", "targets": ["."], "clarifying_question": null}'
         else:
             # Base model
             if self.prompt_mode == "full":
-                # Base model with Full prompt: mostly succeeds (~85%), occasional syntax quirk
                 if is_clarification:
                     content = '{"command": null, "targets": [], "clarifying_question": "Which target should be affected?"}'
-                elif "remove all log" in prompt:
-                    content = '{"command": "Remove-Item *.log", "targets": ["*.log"], "clarifying_question": null}'
+                elif "remove all log" in prompt or "temp_*.log" in prompt:
+                    content = '{"command": "rm -f temp_*.log", "targets": ["temp_*.log"], "clarifying_question": null}'
                 elif "package.json" in prompt:
-                    content = '{"command": "Get-Content package.json", "targets": ["package.json"], "clarifying_question": null}'
-                elif "artifacts" in prompt:
-                    content = '{"command": "mkdir -p artifacts", "targets": ["artifacts"], "clarifying_question": null}'
+                    content = '{"command": "cat package.json", "targets": ["package.json"], "clarifying_question": null}'
+                elif "artifacts" in prompt or "build/dist" in prompt:
+                    content = '{"command": "mkdir -p build/dist", "targets": ["build/dist"], "clarifying_question": null}'
                 else:
                     content = '{"command": "ls", "targets": ["."], "clarifying_question": null}'
             else:
-                # Base model with Short prompt: fails to output JSON schema, hallucinates, low accuracy
+                # Base model with Short / Zero-shot prompt degrades heavily
                 if self.call_count % 3 == 0:
-                    # Broken JSON
                     content = 'Sure, here is the command: `rm -rf /` to remove everything'
                 elif self.call_count % 3 == 1:
-                    # Generic hallucinated command
                     content = '{"command": "echo done", "targets": []}'
                 else:
-                    content = '{"command": "Get-ChildItem", "targets": []}'
+                    content = '{"command": "ls", "targets": []}'
 
         output_tokens = estimate_token_count(content)
 
@@ -577,9 +615,15 @@ def evaluate_single_case(
     fixture_spec = case_spec.get("fixture_spec", {})
 
     # Construct prompt
-    l0 = L0_SYSTEM_PROMPT if prompt_mode == "full" else SHORT_L0_PROMPT
+    if prompt_mode == "full":
+        l0 = L0_SYSTEM_PROMPT
+    elif prompt_mode == "zero_shot":
+        l0 = ZERO_SHOT_L0_PROMPT
+    else:
+        l0 = SHORT_L0_PROMPT
+
     l1 = case_spec.get("env", {"shell": shell})
-    prompt_parts = build_prompt(l0=l0, l1=l1, state="", request=request, reasoning=False, mode=prompt_mode)
+    prompt_parts = build_prompt(l0=l0, l1=l1, state="", request=request, reasoning=False, mode="full" if prompt_mode == "full" else "short")
 
     t0 = time.perf_counter()
     resp = backend.complete(prompt=prompt_parts.full_text, temperature=0.0)
@@ -597,7 +641,6 @@ def evaluate_single_case(
         execution_success = False
         eval_reason = f"Invalid JSON response: {parse_err}"
     elif is_clarification:
-        # For ambiguous queries, success means the model asked a question rather than executing a blind command
         if clarifying_q and not cand_command:
             execution_success = True
             eval_reason = f"Correctly requested clarification: '{clarifying_q}'"
@@ -605,7 +648,6 @@ def evaluate_single_case(
             execution_success = False
             eval_reason = f"Failed clarification: Emitted command '{cand_command}' without clarifying"
     else:
-        # Regular command: evaluate via tempfile fixture sandbox
         if not cand_command:
             execution_success = False
             eval_reason = "Model returned empty command string"
@@ -726,19 +768,26 @@ def run_condition_evaluation(
 def generate_e5_markdown_report(
     summaries: Mapping[str, ConditionSummary],
     mcnemar_results: Mapping[str, dict[str, Any]],
+    paired_diff_results: Mapping[str, tuple[float, float, float]],
     provenance_meta: dict[str, Any],
+    split_name: str = "dev",
 ) -> str:
     """
     Format academic evaluation markdown report (Table 8.2 & paired comparisons).
     """
     lines = [
-        "# Experiment E5: 2x2 Factorial Evaluation Matrix",
+        f"# Experiment E5: Live Nemotron-3-Nano Benchmark Evaluation ({split_name.upper()} split)",
         "",
         "## Executive Summary & Headline Results",
         "",
-        "This evaluation tests whether instruction fine-tuning (`Nemotron-3-Nano-4B-Tuned`)",
-        "allows reducing the system prompt context from full (~450 tokens) to short (<= 100 tokens)",
-        "without sacrificing command execution accuracy or safety compliance.",
+        f"Evaluates the live `Nemotron-3-Nano-4B` model across a rigorous paired factorial matrix on the **{split_name}** benchmark split.",
+        "Strictly tests whether instruction fine-tuning preserves execution accuracy, JSON validity, and clarification adherence",
+        "when system prompt context is reduced from full (~450 tokens) to short (<= 100 tokens), tested against baseline/zero-shot prompts.",
+        "",
+        f"- **Benchmark Split**: `{split_name}`",
+        f"- **Evaluated Test Cases**: `{next(iter(summaries.values())).total_cases if summaries else 0}`",
+        f"- **Backend Server**: `{provenance_meta.get('backend')}`",
+        f"- **Model Under Test**: `{provenance_meta.get('model_file', 'Nemotron-3-Nano-4B')}`",
         "",
         "### Table 8.2: 2x2 Factorial Performance Matrix",
         "",
@@ -761,17 +810,19 @@ def generate_e5_markdown_report(
         "",
         "### Statistical Significance (McNemar's Paired Tests)",
         "",
-        "Paired comparisons evaluate discordant outcomes on identical sealed benchmark queries:",
+        "Paired comparisons evaluate discordant outcomes and paired difference confidence intervals on identical benchmark queries:",
         "",
-        "| Comparison Pair | Condition A Pass / B Fail (b) | Condition A Fail / B Pass (c) | Chi-Square (χ²) | p-value | Statistically Significant (p < 0.05) |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: |",
+        "| Comparison Pair | Condition A Pass / B Fail (b) | Condition A Fail / B Pass (c) | Paired Accuracy Diff (Δ) [95% CI] | Chi-Square (χ²) / Test Stat | p-value | Statistically Significant (p < 0.05) |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
     ])
 
     for comp_name, res in mcnemar_results.items():
         sig_str = "**YES** (p < 0.05)" if res["significant_at_05"] else "No"
         p_str = f"{res['p_value']:.4e}" if res["p_value"] < 0.001 else f"{res['p_value']:.4f}"
+        diff_tuple = paired_diff_results.get(comp_name, (0.0, 0.0, 0.0))
+        diff_str = f"**{diff_tuple[0]:+.1f}%** [{diff_tuple[1]:+.1f}%, {diff_tuple[2]:+.1f}%]"
         lines.append(
-            f"| `{comp_name}` | {res['b']} | {res['c']} | {res['chi2']:.2f} | {p_str} | {sig_str} |"
+            f"| `{comp_name}` | {res['b']} | {res['c']} | {diff_str} | {res['chi2']:.2f} | {p_str} | {sig_str} |"
         )
 
     # Prefill and Prompt Savings
@@ -795,7 +846,9 @@ def generate_e5_markdown_report(
         f"- **Git SHA**: `{provenance_meta.get('git_sha')}`",
         f"- **GPU / Hardware**: `{provenance_meta.get('gpu')}`",
         f"- **Driver / Server**: `{provenance_meta.get('driver')}` / `{provenance_meta.get('backend')}`",
+        f"- **Model File**: `{provenance_meta.get('model_file')}`",
         f"- **Timestamp**: `{provenance_meta.get('timestamp')}`",
+        f"- **Seed**: `{provenance_meta.get('seed')}`",
         "",
     ])
 
@@ -807,28 +860,113 @@ def generate_e5_markdown_report(
 # -----------------------------------------------------------------------------
 
 def run_e5_experiment(
-    test_file: str = "datasets/sealed_test.jsonl",
-    output_jsonl: str = "results/e5_matrix.jsonl",
-    output_md: str = "results/e5_matrix.md",
-    allow_mock: bool = True,
-    count: int = 50,
+    test_file: str | None = None,
+    output_jsonl: str | None = None,
+    output_md: str | None = None,
+    split: str = "dev",
+    allow_mock: bool = False,
+    count: int | None = None,
     base_backend: Any = None,
     tuned_backend: Any = None,
     seed: int = 42,
+    url: str | None = None,
+    base_url: str | None = None,
+    tuned_url: str | None = None,
 ) -> tuple[dict[str, ConditionSummary], dict[str, dict[str, Any]]]:
-    """Run full 2x2 matrix evaluation and write results with provenance."""
-    random.seed(seed)
-    test_cases = load_or_create_sealed_test_set(test_file, count=count)
-    if count < len(test_cases):
-        test_cases = test_cases[:count]
+    """
+    Run full 2x2 matrix evaluation and write results with provenance.
 
-    # Collect provenance metadata
-    backend_label = "mock" if allow_mock and (base_backend is None or tuned_backend is None) else "llama-server"
+    Parameters:
+        test_file: Explicit dataset path, or None for split default.
+        output_jsonl: Explicit output JSONL path, or None for split default.
+        output_md: Explicit output Markdown report path, or None for split default.
+        split: 'dev' (datasets/dev_v3.jsonl, N >= 100) or 'sealed' (datasets/sealed_test.jsonl).
+        allow_mock: If False, strictly excludes mock backends and requires live server.
+        count: Number of cases to evaluate (must be >= 100 for dev split).
+        base_backend: Optional custom backend for base model.
+        tuned_backend: Optional custom backend for tuned model.
+        seed: Random seed for reproducibility.
+        url: Shared URL for live model server.
+        base_url: Optional URL for base model endpoint.
+        tuned_url: Optional URL for tuned model endpoint.
+    """
+    random.seed(seed)
+
+    # 1. Dataset Partition & Strict Dev Verification
+    if test_file and "sealed" in test_file:
+        split_norm = "sealed"
+    else:
+        split_norm = split.lower().strip()
+
+    if split_norm == "dev":
+        target_test_file = test_file or "datasets/dev_v3.jsonl"
+        target_output_jsonl = output_jsonl or "results/e5_dev.jsonl"
+        target_output_md = output_md or "results/e5_dev_summary.md"
+        test_cases = load_dev_v3_dataset(target_test_file, enforce_min_n=not allow_mock)
+        if count is not None:
+            if not allow_mock and count < 100:
+                raise ValueError(
+                    f"Dev split evaluation strictly requires N >= 100 test cases, but count={count} was requested."
+                )
+            test_cases = test_cases[:count]
+    elif split_norm == "sealed":
+        target_test_file = test_file or "datasets/sealed_test.jsonl"
+        target_output_jsonl = output_jsonl or "results/e5_matrix.jsonl"
+        target_output_md = output_md or "results/e5_matrix.md"
+        test_cases = load_or_create_sealed_test_set(target_test_file, count=count or 50)
+        if count is not None and count < len(test_cases):
+            test_cases = test_cases[:count]
+    else:
+        raise ValueError(f"Unknown split: '{split}'. Supported splits are 'dev' and 'sealed'.")
+
+    # 2. Strict Mock Backend Enforcement
+    if not allow_mock:
+        # Check explicit custom backends
+        for b in (base_backend, tuned_backend):
+            if b is not None:
+                b_name = b.__class__.__name__.lower()
+                if "mock" in b_name or "demo" in b_name:
+                    raise RuntimeError(
+                        f"Mock backends are strictly excluded from live benchmark runs (got {b.__class__.__name__}). "
+                        "A live Nemotron-3-Nano model server is required."
+                    )
+
+        # Probe live server reachability
+        live_endpoint = url or resolve_local_endpoint()
+        try:
+            import requests
+            probe_url = (
+                live_endpoint.replace("/completion", "/health")
+                if "/completion" in live_endpoint
+                else live_endpoint.replace("/chat/completions", "/models")
+            )
+            r = requests.get(probe_url, timeout=1.5)
+            if r.status_code not in (200, 404):
+                raise ConnectionError(f"Server at {live_endpoint} returned HTTP status {r.status_code}")
+        except Exception as exc:
+            raise ConnectionError(
+                f"Failed to connect to live model server at {live_endpoint}: {exc}. "
+                "Mock backends are strictly excluded from live benchmark runs. "
+                "Please start llama-server or LM Studio with Nemotron-3-Nano on 127.0.0.1:8080 or 127.0.0.1:1234, or specify --url."
+            ) from exc
+
+        backend_label = "llama-server"
+        base_backend = base_backend or LlamaServerBackend(endpoint_url=base_url or live_endpoint)
+        tuned_backend = tuned_backend or LlamaServerBackend(endpoint_url=tuned_url or live_endpoint)
+    else:
+        if base_backend is not None and isinstance(base_backend, LlamaServerBackend):
+            backend_label = getattr(base_backend, "backend_name", "llama-server")
+        elif base_backend is not None:
+            backend_label = getattr(base_backend, "backend_name", getattr(base_backend, "name", "mock"))
+        else:
+            backend_label = "mock"
+
+    # 3. Collect Full Provenance
     prov = collect(backend=backend_label, seed=seed)
 
-    # Initialize backends
+    # 4. Initialize Backends
     if allow_mock and (base_backend is None or tuned_backend is None):
-        print("[MOCK MODE] Running 2x2 matrix with deterministic MockLlamaBackend...")
+        print(f"[MOCK MODE] Running 2x2 matrix with MockLlamaBackend on {split_norm} split...")
         backends = {
             "base_full": MockLlamaBackend("base", "full"),
             "base_short": MockLlamaBackend("base", "short"),
@@ -869,7 +1007,7 @@ def run_e5_experiment(
             f"  -> Accuracy: {summary.accuracy_pct:.1f}% [CI: {summary.accuracy_interval[0]:.1f}%, {summary.accuracy_interval[1]:.1f}%] | TTFT: {summary.mean_prefill_ms:.1f}ms"
         )
 
-    # Compute McNemar paired statistical tests
+    # 5. Compute McNemar's Paired Tests & Paired Difference Intervals
     mcnemar_pairs = {
         "Tuned_Short_vs_Base_Short": calculate_mcnemar_test(
             summaries["tuned_short"].case_success_vector,
@@ -889,52 +1027,72 @@ def run_e5_experiment(
         ),
     }
 
-    # Write per-case results JSONL
-    os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)), exist_ok=True)
-    with open(output_jsonl, "w", encoding="utf-8") as f:
-        for rec in all_case_records:
-            f.write(_json.dumps(rec) + "\n")
-    print(f"\nWritten {len(all_case_records)} per-case evaluation records to: {output_jsonl}")
+    paired_diff_pairs = {
+        "Tuned_Short_vs_Base_Short": calculate_paired_difference(
+            summaries["tuned_short"].case_success_vector,
+            summaries["base_short"].case_success_vector,
+        ),
+        "Tuned_Short_vs_Base_Full": calculate_paired_difference(
+            summaries["tuned_short"].case_success_vector,
+            summaries["base_full"].case_success_vector,
+        ),
+        "Tuned_Short_vs_Tuned_Full": calculate_paired_difference(
+            summaries["tuned_short"].case_success_vector,
+            summaries["tuned_full"].case_success_vector,
+        ),
+        "Base_Full_vs_Base_Short": calculate_paired_difference(
+            summaries["base_full"].case_success_vector,
+            summaries["base_short"].case_success_vector,
+        ),
+    }
 
-    # Generate Markdown summary report
-    os.makedirs(os.path.dirname(os.path.abspath(output_md)), exist_ok=True)
-    report_md = generate_e5_markdown_report(summaries, mcnemar_pairs, prov)
-    with open(output_md, "w", encoding="utf-8") as f:
+    # 6. Write Output JSONL Records
+    os.makedirs(os.path.dirname(os.path.abspath(target_output_jsonl)), exist_ok=True)
+    with open(target_output_jsonl, "w", encoding="utf-8") as f:
+        for rec in all_case_records:
+            missing_prov = validate_provenance(rec)
+            if missing_prov:
+                raise ValueError(f"Record {rec.get('case_id')} missing required provenance fields: {missing_prov}")
+            f.write(_json.dumps(rec) + "\n")
+    print(f"\nWritten {len(all_case_records)} per-case evaluation records to: {target_output_jsonl}")
+
+    # 7. Generate Markdown Summary Report
+    os.makedirs(os.path.dirname(os.path.abspath(target_output_md)), exist_ok=True)
+    report_md = generate_e5_markdown_report(summaries, mcnemar_pairs, paired_diff_pairs, prov, split_name=split_norm)
+    with open(target_output_md, "w", encoding="utf-8") as f:
         f.write(report_md)
-    print(f"Summary Markdown report written to: {output_md}")
+    print(f"Summary Markdown report written to: {target_output_md}")
 
     return summaries, mcnemar_pairs
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Experiment E5: 2x2 Evaluation Matrix.")
-    parser.add_argument("--test-file", default="datasets/sealed_test.jsonl", help="Path to sealed test JSONL")
-    parser.add_argument("--output-jsonl", default="results/e5_matrix.jsonl", help="Output JSONL records path")
-    parser.add_argument("--output-md", default="results/e5_matrix.md", help="Output Markdown report path")
-    parser.add_argument("--count", type=int, default=50, help="Number of benchmark test cases to evaluate")
+    parser = argparse.ArgumentParser(description="Run Experiment E5: 2x2 Factorial Evaluation Matrix.")
+    parser.add_argument("--split", choices=["dev", "sealed"], default="dev", help="Dataset split ('dev' or 'sealed')")
+    parser.add_argument("--test-file", default=None, help="Explicit path to test cases JSONL")
+    parser.add_argument("--output-jsonl", default=None, help="Output JSONL records path")
+    parser.add_argument("--output-md", default=None, help="Output Markdown report path")
+    parser.add_argument("--count", "--n", type=int, default=None, help="Number of benchmark test cases to evaluate")
+    parser.add_argument("--url", default=None, help="Shared HTTP URL for live model server")
     parser.add_argument("--base-url", default=None, help="HTTP URL for base llama-server endpoint")
     parser.add_argument("--tuned-url", default=None, help="HTTP URL for tuned llama-server endpoint")
-    parser.add_argument("--mock", action="store_true", help="Force mock backend mode for standalone verification")
+    parser.add_argument("--allow-mock", action="store_true", default=False, help="Allow mock backend (synthetic testing only)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
-
-    base_backend = LlamaServerBackend(endpoint_url=args.base_url) if args.base_url else None
-    tuned_backend = LlamaServerBackend(endpoint_url=args.tuned_url) if args.tuned_url else None
-
-    allow_mock = args.mock or (base_backend is None or tuned_backend is None)
 
     run_e5_experiment(
         test_file=args.test_file,
         output_jsonl=args.output_jsonl,
         output_md=args.output_md,
-        allow_mock=allow_mock,
+        split=args.split,
+        allow_mock=args.allow_mock,
         count=args.count,
-        base_backend=base_backend,
-        tuned_backend=tuned_backend,
+        url=args.url,
+        base_url=args.base_url,
+        tuned_url=args.tuned_url,
         seed=args.seed,
     )
 
 
 if __name__ == "__main__":
     main()
-

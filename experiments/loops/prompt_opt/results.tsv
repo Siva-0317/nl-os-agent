@@ -1,0 +1,2 @@
+experiment_id	timestamp	git_sha	metric_val	baseline_val	delta_pct	ci_lower	ci_upper	prompt_tokens	decision	description
+exp_001	2026-11-09T17:12:52.845954+00:00	dfce40e50ae122bbf342a84ccbef0a6eaab4bfaf	54.00	54.00	+0.00	+0.00	+0.00	86.3	REVERT	Autoresearch trial 1
