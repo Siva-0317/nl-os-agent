@@ -61,13 +61,15 @@ from nlagent.context.layout import DEFAULT_SHORT_L0, build_prompt
 from nlagent.eval.exec_eval import TestCase, evaluate_case
 
 SHORT_L0_PROMPT = (
-    "You are an AI shell agent. Convert user requests into exact terminal commands matching the active environment.\n"
-    "Output ONLY a single valid JSON object: {\"command\": \"...\", \"targets\": [...], \"clarifying_question\": null}."
+    "You are an AI-native operating system shell agent.\n"
+    "Convert the user's natural language request into an exact terminal command matching the active environment.\n"
+    "Output ONLY a single valid JSON object with keys 'command', 'targets', and 'clarifying_question' "
+    "(use relative paths in cwd unless an absolute path is requested; set command to null and provide clarifying_question only when ambiguous)."
 )
 
 ZERO_SHOT_L0_PROMPT = (
     "Convert user requests into exact terminal commands matching the active environment.\n"
-    "Output ONLY a single valid JSON object: {\"command\": \"...\", \"targets\": [...], \"clarifying_question\": null}."
+    "Output ONLY a single valid JSON object with keys 'command', 'targets', and 'clarifying_question'."
 )
 
 
@@ -190,7 +192,11 @@ def parse_model_response(raw_text: str) -> tuple[bool, str | None, list[str], st
     try:
         data = _json.loads(text)
     except Exception as exc:
-        return False, None, [], None, f"JSON parse error: {exc}"
+        repaired = re.sub(r'(?<!\\)\\(?![\\/"bfnrtu])', r"\\\\", text)
+        try:
+            data = _json.loads(repaired)
+        except Exception:
+            return False, None, [], None, f"JSON parse error: {exc}"
 
     if not isinstance(data, dict):
         return False, None, [], None, f"JSON root must be an object, got {type(data).__name__}"
@@ -626,7 +632,15 @@ def evaluate_single_case(
     prompt_parts = build_prompt(l0=l0, l1=l1, state="", request=request, reasoning=False, mode="full" if prompt_mode == "full" else "short")
 
     t0 = time.perf_counter()
-    resp = backend.complete(prompt=prompt_parts.full_text, temperature=0.0)
+    complete_kwargs: dict[str, Any] = {
+        "prompt": prompt_parts.full_text,
+        "temperature": 0.0,
+        "n_predict": 128,
+        "reasoning": False,
+    }
+    if isinstance(backend, LlamaServerBackend):
+        complete_kwargs["system_prompt"] = prompt_parts.prefix_text.strip()
+    resp = backend.complete(**complete_kwargs)
     wall_time_s = time.perf_counter() - t0
 
     # Parse response
@@ -732,6 +746,9 @@ def run_condition_evaluation(
         total_output_tokens += res["output_tokens"]
         total_prefill_ms += res["prefill_ms"]
         total_decode_ms += res["decode_ms"]
+        if len(test_cases) >= 25 and idx % 25 == 0:
+            done_acc = sum(success_vector) / idx * 100.0
+            print(f"    [{idx}/{len(test_cases)}] running accuracy: {done_acc:.1f}%", flush=True)
 
     wall_time = time.perf_counter() - t_start
     n = len(test_cases)
@@ -859,6 +876,68 @@ def generate_e5_markdown_report(
 # Main Experiment Coordinator
 # -----------------------------------------------------------------------------
 
+def _probe_live_endpoint(endpoint_url: str) -> None:
+    """Verify a live llama-server / LM Studio endpoint responds cleanly."""
+    import requests
+
+    probe_url = (
+        endpoint_url.replace("/completion", "/health")
+        if "/completion" in endpoint_url
+        else endpoint_url.replace("/chat/completions", "/models")
+    )
+    try:
+        r = requests.get(probe_url, timeout=2.0)
+        if r.status_code not in (200, 404):
+            raise ConnectionError(f"Server at {endpoint_url} returned HTTP status {r.status_code}")
+    except Exception as exc:
+        raise ConnectionError(
+            f"Failed to connect to live model server at {endpoint_url}: {exc}. "
+            "Mock backends are strictly excluded from live benchmark runs. "
+            "Please start llama-server or pass --base-model / --tuned-model / --url."
+        ) from exc
+
+
+def _start_managed_llama_server(
+    model_path: str,
+    ngl: int = 33,
+    llama_bin: str | None = None,
+) -> tuple[Any, str]:
+    """Start a temporary llama-server process dedicated to a single GGUF model."""
+    from nlagent.runtime.autotune import detect_hardware
+    from nlagent.runtime.manager import LlamaServerProcess, RuntimeConfig, RuntimeManager, find_free_port
+
+    binary = llama_bin or RuntimeManager.find_llama_server_binary()
+    if not binary:
+        raise FileNotFoundError("Could not locate llama-server binary (pass --llama-bin or place in bin/).")
+    resolved_model = str(Path(model_path).resolve())
+    if not os.path.isfile(resolved_model):
+        raise FileNotFoundError(f"GGUF model file not found: {resolved_model}")
+
+    hw = detect_hardware(binary)
+    threads = max(1, hw.cpu.cores_logical - 1)
+    port = find_free_port()
+    cfg = RuntimeConfig(
+        backend="cuda" if ngl > 0 else "cpu",
+        n_gpu_layers=ngl,
+        threads=threads,
+        context_size=2048,
+        port=port,
+        host="127.0.0.1",
+        api_key="",
+        model_path=resolved_model,
+    )
+    proc = LlamaServerProcess(binary_path=binary, config=cfg, auto_restart=False)
+    if not proc.start(wait_ready=True, timeout=45.0):
+        raise RuntimeError(f"llama-server failed to load model {resolved_model}: {proc.last_error}")
+    import threading
+
+    if proc.process is not None:
+        for stream in (proc.process.stdout, proc.process.stderr):
+            if stream is not None:
+                threading.Thread(target=lambda s=stream: s.read(), daemon=True).start()
+    return proc, f"{proc.base_url}/v1/chat/completions"
+
+
 def run_e5_experiment(
     test_file: str | None = None,
     output_jsonl: str | None = None,
@@ -872,6 +951,10 @@ def run_e5_experiment(
     url: str | None = None,
     base_url: str | None = None,
     tuned_url: str | None = None,
+    base_model: str | None = None,
+    tuned_model: str | None = None,
+    ngl: int = 33,
+    llama_bin: str | None = None,
 ) -> tuple[dict[str, ConditionSummary], dict[str, dict[str, Any]]]:
     """
     Run full 2x2 matrix evaluation and write results with provenance.
@@ -889,6 +972,10 @@ def run_e5_experiment(
         url: Shared URL for live model server.
         base_url: Optional URL for base model endpoint.
         tuned_url: Optional URL for tuned model endpoint.
+        base_model: Optional local GGUF path for Base (auto-managed sequential llama-server).
+        tuned_model: Optional local GGUF path for Tuned (auto-managed sequential llama-server).
+        ngl: GPU layers for managed llama-server instances (default: 33).
+        llama_bin: Optional explicit path to llama-server executable.
     """
     random.seed(seed)
 
@@ -919,9 +1006,10 @@ def run_e5_experiment(
     else:
         raise ValueError(f"Unknown split: '{split}'. Supported splits are 'dev' and 'sealed'.")
 
+    managed_sequential = bool(not allow_mock and (base_model or tuned_model))
+
     # 2. Strict Mock Backend Enforcement
     if not allow_mock:
-        # Check explicit custom backends
         for b in (base_backend, tuned_backend):
             if b is not None:
                 b_name = b.__class__.__name__.lower()
@@ -931,28 +1019,19 @@ def run_e5_experiment(
                         "A live Nemotron-3-Nano model server is required."
                     )
 
-        # Probe live server reachability
-        live_endpoint = url or resolve_local_endpoint()
-        try:
-            import requests
-            probe_url = (
-                live_endpoint.replace("/completion", "/health")
-                if "/completion" in live_endpoint
-                else live_endpoint.replace("/chat/completions", "/models")
-            )
-            r = requests.get(probe_url, timeout=1.5)
-            if r.status_code not in (200, 404):
-                raise ConnectionError(f"Server at {live_endpoint} returned HTTP status {r.status_code}")
-        except Exception as exc:
-            raise ConnectionError(
-                f"Failed to connect to live model server at {live_endpoint}: {exc}. "
-                "Mock backends are strictly excluded from live benchmark runs. "
-                "Please start llama-server or LM Studio with Nemotron-3-Nano on 127.0.0.1:8080 or 127.0.0.1:1234, or specify --url."
-            ) from exc
+        if not managed_sequential:
+            fallback_ep = url or resolve_local_endpoint()
+            resolved_base_ep = base_url or fallback_ep
+            resolved_tuned_ep = tuned_url or fallback_ep
+            probed: set[str] = set()
+            for ep in (resolved_base_ep, resolved_tuned_ep):
+                if ep not in probed:
+                    _probe_live_endpoint(ep)
+                    probed.add(ep)
+            base_backend = base_backend or LlamaServerBackend(endpoint_url=resolved_base_ep, reasoning=False)
+            tuned_backend = tuned_backend or LlamaServerBackend(endpoint_url=resolved_tuned_ep, reasoning=False)
 
         backend_label = "llama-server"
-        base_backend = base_backend or LlamaServerBackend(endpoint_url=base_url or live_endpoint)
-        tuned_backend = tuned_backend or LlamaServerBackend(endpoint_url=tuned_url or live_endpoint)
     else:
         if base_backend is not None and isinstance(base_backend, LlamaServerBackend):
             backend_label = getattr(base_backend, "backend_name", "llama-server")
@@ -964,48 +1043,98 @@ def run_e5_experiment(
     # 3. Collect Full Provenance
     prov = collect(backend=backend_label, seed=seed)
 
-    # 4. Initialize Backends
-    if allow_mock and (base_backend is None or tuned_backend is None):
-        print(f"[MOCK MODE] Running 2x2 matrix with MockLlamaBackend on {split_norm} split...")
-        backends = {
-            "base_full": MockLlamaBackend("base", "full"),
-            "base_short": MockLlamaBackend("base", "short"),
-            "tuned_full": MockLlamaBackend("tuned", "full"),
-            "tuned_short": MockLlamaBackend("tuned", "short"),
-        }
-    else:
-        backends = {
-            "base_full": base_backend,
-            "base_short": base_backend,
-            "tuned_full": tuned_backend,
-            "tuned_short": tuned_backend,
-        }
-
+    # 4. Initialize & Evaluate 2x2 Matrix
     summaries: dict[str, ConditionSummary] = {}
     all_case_records: list[dict[str, Any]] = []
 
-    cells = [
-        ("base_full", "base", "full"),
-        ("base_short", "base", "short"),
-        ("tuned_full", "tuned", "full"),
-        ("tuned_short", "tuned", "short"),
-    ]
+    if managed_sequential:
+        from nlagent.runtime.models import compute_sha256
 
-    for key, model_name, pmode in cells:
-        print(f"Evaluating Condition: {model_name.upper()} + {pmode.upper()} ({len(test_cases)} cases)...")
-        backend = backends[key]
-        summary, records = run_condition_evaluation(
-            model_name=model_name,
-            prompt_mode=pmode,
-            test_cases=test_cases,
-            backend=backend,
-            provenance_meta=prov,
-        )
-        summaries[key] = summary
-        all_case_records.extend(records)
-        print(
-            f"  -> Accuracy: {summary.accuracy_pct:.1f}% [CI: {summary.accuracy_interval[0]:.1f}%, {summary.accuracy_interval[1]:.1f}%] | TTFT: {summary.mean_prefill_ms:.1f}ms"
-        )
+        role_groups = [
+            ("base", base_model, base_url or url, [("base_full", "full"), ("base_short", "short")]),
+            ("tuned", tuned_model, tuned_url or url, [("tuned_full", "full"), ("tuned_short", "short")]),
+        ]
+        model_labels: list[str] = []
+
+        for model_name, model_path_spec, fallback_url, subcells in role_groups:
+            proc = None
+            try:
+                cell_prov = dict(prov)
+                if model_path_spec:
+                    mpath = str(Path(model_path_spec).resolve())
+                    msha = compute_sha256(mpath)
+                    cell_prov["model_file"] = Path(mpath).name
+                    cell_prov["model_sha256"] = msha
+                    model_labels.append(f"{model_name}={Path(mpath).name}")
+                    print(f"\nLaunching {model_name.upper()} llama-server ({Path(mpath).name}, ngl={ngl})...")
+                    proc, ep = _start_managed_llama_server(mpath, ngl=ngl, llama_bin=llama_bin)
+                    backend = LlamaServerBackend(endpoint_url=ep, reasoning=False)
+                else:
+                    ep = fallback_url or resolve_local_endpoint()
+                    _probe_live_endpoint(ep)
+                    backend = LlamaServerBackend(endpoint_url=ep, reasoning=False)
+                    model_labels.append(f"{model_name}={ep}")
+
+                for key, pmode in subcells:
+                    print(f"Evaluating Condition: {model_name.upper()} + {pmode.upper()} ({len(test_cases)} cases)...")
+                    summary, records = run_condition_evaluation(
+                        model_name=model_name,
+                        prompt_mode=pmode,
+                        test_cases=test_cases,
+                        backend=backend,
+                        provenance_meta=cell_prov,
+                    )
+                    summaries[key] = summary
+                    all_case_records.extend(records)
+                    print(
+                        f"  -> Accuracy: {summary.accuracy_pct:.1f}% [CI: {summary.accuracy_interval[0]:.1f}%, {summary.accuracy_interval[1]:.1f}%] | TTFT: {summary.mean_prefill_ms:.1f}ms"
+                    )
+            finally:
+                if proc is not None:
+                    proc.stop()
+                    print(f"Stopped {model_name.upper()} llama-server cleanly.")
+
+        if model_labels:
+            prov["model_file"] = " | ".join(model_labels)
+    else:
+        if allow_mock and (base_backend is None or tuned_backend is None):
+            print(f"[MOCK MODE] Running 2x2 matrix with MockLlamaBackend on {split_norm} split...")
+            backends = {
+                "base_full": MockLlamaBackend("base", "full"),
+                "base_short": MockLlamaBackend("base", "short"),
+                "tuned_full": MockLlamaBackend("tuned", "full"),
+                "tuned_short": MockLlamaBackend("tuned", "short"),
+            }
+        else:
+            backends = {
+                "base_full": base_backend,
+                "base_short": base_backend,
+                "tuned_full": tuned_backend,
+                "tuned_short": tuned_backend,
+            }
+
+        cells = [
+            ("base_full", "base", "full"),
+            ("base_short", "base", "short"),
+            ("tuned_full", "tuned", "full"),
+            ("tuned_short", "tuned", "short"),
+        ]
+
+        for key, model_name, pmode in cells:
+            print(f"Evaluating Condition: {model_name.upper()} + {pmode.upper()} ({len(test_cases)} cases)...")
+            backend = backends[key]
+            summary, records = run_condition_evaluation(
+                model_name=model_name,
+                prompt_mode=pmode,
+                test_cases=test_cases,
+                backend=backend,
+                provenance_meta=prov,
+            )
+            summaries[key] = summary
+            all_case_records.extend(records)
+            print(
+                f"  -> Accuracy: {summary.accuracy_pct:.1f}% [CI: {summary.accuracy_interval[0]:.1f}%, {summary.accuracy_interval[1]:.1f}%] | TTFT: {summary.mean_prefill_ms:.1f}ms"
+            )
 
     # 5. Compute McNemar's Paired Tests & Paired Difference Intervals
     mcnemar_pairs = {
@@ -1076,6 +1205,10 @@ def main():
     parser.add_argument("--url", default=None, help="Shared HTTP URL for live model server")
     parser.add_argument("--base-url", default=None, help="HTTP URL for base llama-server endpoint")
     parser.add_argument("--tuned-url", default=None, help="HTTP URL for tuned llama-server endpoint")
+    parser.add_argument("--base-model", default=None, help="Path to base GGUF (auto-starts/stops dedicated llama-server)")
+    parser.add_argument("--tuned-model", default=None, help="Path to tuned GGUF (auto-starts/stops dedicated llama-server)")
+    parser.add_argument("--ngl", type=int, default=33, help="GPU layers for --base-model / --tuned-model")
+    parser.add_argument("--llama-bin", default=None, help="Optional path to llama-server executable")
     parser.add_argument("--allow-mock", action="store_true", default=False, help="Allow mock backend (synthetic testing only)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
@@ -1090,6 +1223,10 @@ def main():
         url=args.url,
         base_url=args.base_url,
         tuned_url=args.tuned_url,
+        base_model=args.base_model,
+        tuned_model=args.tuned_model,
+        ngl=args.ngl,
+        llama_bin=args.llama_bin,
         seed=args.seed,
     )
 
