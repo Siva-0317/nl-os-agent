@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Any, Iterator
 
 from nlagent.safety.cmd_parser import CmdInvocation, parse_cmd_line
 from nlagent.safety.ps_parser import ParsedPSCommand, PSParseResult, parse_powershell
@@ -60,8 +60,20 @@ def _expand(arg: str, cwd: str) -> list[str]:
     if not arg:
         return []
     p = arg if os.path.isabs(arg) else os.path.join(cwd, arg)
-    hits = glob.glob(p) if any(c in arg for c in "*?[") else [p]
-    return [h for h in hits if os.path.lexists(h)] or ([] if any(c in arg for c in "*?[") else [p])
+    has_glob = any(c in arg for c in "*?[")
+    hits = glob.glob(p) if has_glob else [p]
+    return [h for h in hits if os.path.lexists(h)] or ([] if has_glob else [p])
+
+
+def _get_ps_param(params: dict[str, Any], name: str, default: Any = None) -> Any:
+    """Case-insensitive parameter lookup for parsed PowerShell commands."""
+    if name in params:
+        return params[name]
+    name_low = name.lower()
+    for k, v in params.items():
+        if k.lower() == name_low:
+            return v
+    return default
 
 
 def _walk(path: str) -> Iterator[str]:
@@ -249,19 +261,19 @@ def analyse(
             e.opaque = True
             e.notes.append(f"dynamic variable or operator invocation ({v})")
 
-        # Extract targets: -Path, -LiteralPath, or positional args
+        # Extract targets: -Path, -LiteralPath, or positional args (case-insensitive keys)
         ps_targets: list[str] = []
-        if "Path" in params:
-            val = params["Path"]
-            ps_targets.extend(val if isinstance(val, list) else [str(val)])
-        if "LiteralPath" in params:
-            val = params["LiteralPath"]
-            ps_targets.extend(val if isinstance(val, list) else [str(val)])
+        raw_path = _get_ps_param(params, "Path")
+        if raw_path is not None and raw_path is not True:
+            ps_targets.extend(raw_path if isinstance(raw_path, list) else [str(raw_path)])
+        raw_lit_path = _get_ps_param(params, "LiteralPath")
+        if raw_lit_path is not None and raw_lit_path is not True:
+            ps_targets.extend(raw_lit_path if isinstance(raw_lit_path, list) else [str(raw_lit_path)])
         ps_targets.extend(pos)
 
         # Remove-Item (aliases: ri, rm, rmdir, del, erase, rd)
         if v in ("remove-item", "remove-itemproperty"):
-            is_recurse = bool(params.get("Recurse", False) or params.get("r", False))
+            is_recurse = bool(_get_ps_param(params, "Recurse", False) or _get_ps_param(params, "r", False))
             for t in ps_targets:
                 if _is_registry_path(t):
                     e.registry_writes.append(t)
@@ -278,13 +290,52 @@ def analyse(
                             e.deletes.append(exp)
                             e.bytes_affected += _size(exp)
 
+        # New-Item (aliases: ni, md)
+        elif v == "new-item":
+            item_type = str(_get_ps_param(params, "ItemType", "") or "").lower()
+            is_force = bool(_get_ps_param(params, "Force", False))
+            name_arg = _get_ps_param(params, "Name")
+            if raw_path and name_arg and not isinstance(name_arg, bool):
+                ni_targets = [os.path.join(str(raw_path), str(name_arg))]
+            elif name_arg and not isinstance(name_arg, bool) and not ps_targets:
+                ni_targets = [str(name_arg)]
+            else:
+                ni_targets = ps_targets
+            for t in ni_targets:
+                if _is_registry_path(t):
+                    e.registry_writes.append(t)
+                    if enable_protected_paths and _is_protected_registry(t):
+                        e.protected_hit = True
+                    e.creates.append(f"registry:{t}")
+                else:
+                    for p in _expand(t, cwd):
+                        if os.path.exists(p) and not os.path.isdir(p) and is_force and item_type != "directory":
+                            e.overwrites.append(p)
+                        else:
+                            e.creates.append(p)
+
+        # Rename-Item (aliases: rni, ren)
+        elif v == "rename-item":
+            new_name = _get_ps_param(params, "NewName", "")
+            if not new_name:
+                new_name = pos[1] if (not raw_path and not raw_lit_path and len(pos) >= 2) else (pos[0] if (raw_path or raw_lit_path) and pos else "")
+            src_list = ps_targets[:-1] if (not _get_ps_param(params, "NewName") and len(ps_targets) >= 2) else ps_targets
+            if new_name:
+                for s in src_list:
+                    for sp in _expand(s, cwd):
+                        e.deletes.append(sp)
+                        parent_dir = os.path.dirname(sp)
+                        final = os.path.join(parent_dir, os.path.basename(str(new_name))) if parent_dir else str(new_name)
+                        (e.overwrites if os.path.exists(final) else e.creates).append(final)
+
         # Move-Item (aliases: mi, mv, move)
         elif v == "move-item":
-            dst = params.get("Destination", "") or (pos[1] if len(pos) >= 2 else "")
-            srcs = ps_targets[:-1] if (not params.get("Destination") and len(ps_targets) >= 2) else ps_targets
+            dst_param = _get_ps_param(params, "Destination", "")
+            dst = dst_param or (pos[1] if len(pos) >= 2 else "")
+            srcs = ps_targets[:-1] if (not dst_param and len(ps_targets) >= 2) else ps_targets
             if dst:
                 dst_exp = _expand(str(dst), cwd)
-                dst_p = dst_exp[0] if dst_exp else (dst if os.path.isabs(dst) else os.path.join(cwd, dst))
+                dst_p = dst_exp[0] if dst_exp else (str(dst) if os.path.isabs(str(dst)) else os.path.join(cwd, str(dst)))
                 for s in srcs:
                     for sp in _expand(s, cwd):
                         e.deletes.append(sp)
@@ -293,11 +344,12 @@ def analyse(
 
         # Copy-Item (aliases: cpi, cp, copy, ci)
         elif v == "copy-item":
-            dst = params.get("Destination", "") or (pos[1] if len(pos) >= 2 else "")
-            srcs = ps_targets[:-1] if (not params.get("Destination") and len(ps_targets) >= 2) else ps_targets
+            dst_param = _get_ps_param(params, "Destination", "")
+            dst = dst_param or (pos[1] if len(pos) >= 2 else "")
+            srcs = ps_targets[:-1] if (not dst_param and len(ps_targets) >= 2) else ps_targets
             if dst:
                 dst_exp = _expand(str(dst), cwd)
-                dst_p = dst_exp[0] if dst_exp else (dst if os.path.isabs(dst) else os.path.join(cwd, dst))
+                dst_p = dst_exp[0] if dst_exp else (str(dst) if os.path.isabs(str(dst)) else os.path.join(cwd, str(dst)))
                 for s in srcs:
                     for sp in _expand(s, cwd):
                         final = os.path.join(dst_p, os.path.basename(sp)) if os.path.isdir(dst_p) else dst_p
@@ -315,10 +367,16 @@ def analyse(
                     for p in _expand(t, cwd):
                         (e.overwrites if os.path.exists(p) else e.creates).append(p)
 
+        # Add-Content (alias: ac)
+        elif v == "add-content":
+            for t in ps_targets:
+                for p in _expand(t, cwd):
+                    (e.appends if os.path.exists(p) else e.creates).append(p)
+
         # Out-File
         elif v == "out-file":
-            is_append = bool(params.get("Append", False))
-            target_file = params.get("FilePath", "") or (pos[0] if pos else "")
+            is_append = bool(_get_ps_param(params, "Append", False))
+            target_file = _get_ps_param(params, "FilePath", "") or (pos[0] if pos else "")
             if target_file:
                 for p in _expand(str(target_file), cwd):
                     if is_append:
@@ -349,16 +407,18 @@ def analyse(
         # Stop-Process (aliases: spps, kill)
         elif v == "stop-process":
             targets = []
-            if "Name" in params:
-                targets.append(str(params["Name"]))
-            if "Id" in params:
-                targets.append(str(params["Id"]))
+            ps_name = _get_ps_param(params, "Name")
+            if ps_name is not None and ps_name is not True:
+                targets.append(str(ps_name))
+            ps_id = _get_ps_param(params, "Id")
+            if ps_id is not None and ps_id is not True:
+                targets.append(str(ps_id))
             targets.extend(pos)
             e.signals += targets
 
         # Start-Process with -Verb RunAs
         elif v == "start-process":
-            verb = str(params.get("Verb", ""))
+            verb = str(_get_ps_param(params, "Verb", "") or "")
             if verb.lower() == "runas":
                 e.protected_hit = True
                 e.notes.append("privilege escalation via Start-Process -Verb RunAs")

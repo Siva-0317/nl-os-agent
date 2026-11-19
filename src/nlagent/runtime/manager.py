@@ -653,11 +653,14 @@ class RuntimeManager:
         if path_bin:
             return path_bin
 
-        # Check standard Windows local appdata locations
+        # Check standard Windows local appdata, executable-adjacent, and workspace locations
         local_app = os.environ.get("LOCALAPPDATA", "")
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         candidates = [
             os.path.join(local_app, "Programs", "NLAgent", "bin", "llama-server.exe"),
             os.path.join(local_app, "NLAgent", "bin", "llama-server.exe"),
+            os.path.join(exe_dir, "bin", "llama-server.exe"),
+            os.path.join(exe_dir, "llama-server.exe"),
             os.path.join(os.getcwd(), "bin", "llama-server.exe"),
             os.path.join(os.getcwd(), "llama-server.exe"),
         ]
@@ -780,7 +783,14 @@ def run_doctor(
         ram_str += " [NOTE: Low Available RAM]"
 
     # 2. Model Integrity Check
-    active_model = model_path or os.environ.get("NLAGENT_MODEL_FILE") or "models/nemotron-3-nano-4b.Q4_K_M.gguf"
+    candidate_models = [
+        model_path,
+        os.environ.get("NLAGENT_MODEL_FILE"),
+        "models/NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf",
+        "models/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
+        "models/nemotron-3-nano-4b.Q4_K_M.gguf",
+    ]
+    active_model = next((m for m in candidate_models if m and os.path.exists(m)), candidate_models[2]) or "models/nemotron-3-nano-4b.Q4_K_M.gguf"
     model_ok = False
 
     if os.path.exists(active_model):

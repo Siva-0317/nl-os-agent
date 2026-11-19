@@ -128,6 +128,7 @@ class LlamaServerBackend:
         timeout: float = 60.0,
         session: Any | None = None,
         reasoning: bool = True,
+        api_key: str | None = None,
     ) -> None:
         self.endpoint_url = endpoint_url
         self.model_name = model_name
@@ -137,6 +138,10 @@ class LlamaServerBackend:
         self.last_timings: dict[str, Any] = {}
         self._state_tokens: list[int] = []
 
+        active_key = api_key or os.environ.get("LLAMA_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if active_key and "Authorization" not in self.session.headers:
+            self.session.headers["Authorization"] = f"Bearer {active_key}"
+
     def complete(
         self,
         prompt: str | list[int],
@@ -145,6 +150,7 @@ class LlamaServerBackend:
         n_predict: int = 64,
         stop: list[str] | None = None,
         reasoning: bool | None = None,
+        system_prompt: str | None = None,
         **extra_params: Any,
     ) -> CompletionResult:
         """Send a completion request to llama-server or OpenAI-compatible endpoint."""
@@ -153,14 +159,25 @@ class LlamaServerBackend:
 
         is_chat_api = "chat/completions" in self.endpoint_url or "/v1/" in self.endpoint_url
         if is_chat_api:
-            clean_user_prompt = re.sub(r"\n?<think></think>\s*$", "", prompt_str).strip()
+            clean_prompt = re.sub(r"\n?<think></think>\s*$", "", prompt_str).strip()
+            messages: list[dict[str, str]] = []
+            sys_clean = system_prompt.strip() if isinstance(system_prompt, str) and system_prompt.strip() else ""
+            if sys_clean:
+                if clean_prompt.startswith(sys_clean):
+                    user_content = clean_prompt[len(sys_clean):].strip()
+                else:
+                    user_content = clean_prompt
+                messages.append({"role": "system", "content": sys_clean})
+                messages.append({"role": "user", "content": user_content or clean_prompt})
+            else:
+                messages.append({"role": "user", "content": clean_prompt})
             model_id = self.model_name or extra_params.pop("model", None)
             if not model_id:
                 models_url = self.endpoint_url.replace("/chat/completions", "/models")
                 model_id = get_preferred_model_id(models_url) or "nvidia/nemotron-3-nano-4b"
             payload: dict[str, Any] = {
                 "model": model_id,
-                "messages": [{"role": "user", "content": clean_user_prompt}],
+                "messages": messages,
                 "temperature": temperature,
                 "max_tokens": n_predict,
                 "cache_prompt": cache_prompt,
@@ -188,6 +205,10 @@ class LlamaServerBackend:
 
         t_start = time.perf_counter()
         try:
+            if "Authorization" not in self.session.headers:
+                dyn_key = os.environ.get("LLAMA_API_KEY") or os.environ.get("OPENAI_API_KEY")
+                if dyn_key:
+                    self.session.headers["Authorization"] = f"Bearer {dyn_key}"
             resp = self.session.post(
                 self.endpoint_url,
                 json=payload,

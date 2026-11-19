@@ -60,9 +60,15 @@ def create_default_tray_pixmap() -> QPixmap:
 class NLSystemTrayIcon(QSystemTrayIcon):
     """System tray manager for NL-OS-Agent desktop application."""
 
-    def __init__(self, parent: Optional[QWidget] = None, client: Any = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        client: Any = None,
+        chat_window: Any = None,
+    ) -> None:
         super().__init__(parent)
         self.client = client or get_ui_client()
+        self.chat_window = chat_window
         self.preview_window: Optional[PreviewWindow] = None
         self.study_dialog: Optional[StudyTrialDialog] = None
 
@@ -74,6 +80,11 @@ class NLSystemTrayIcon(QSystemTrayIcon):
 
     def _init_menu(self) -> None:
         menu = QMenu()
+
+        # Open Chat Assistant
+        self.act_chat = QAction("Open Chat Assistant...", self)
+        self.act_chat.triggered.connect(self.show_chat_window)
+        menu.addAction(self.act_chat)
 
         # Quick propose
         self.act_propose = QAction("Quick Propose... (Ctrl+Alt+Space)", self)
@@ -115,7 +126,16 @@ class NLSystemTrayIcon(QSystemTrayIcon):
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
-            self.show_preview_window()
+            self.show_chat_window()
+
+    def show_chat_window(self) -> None:
+        """Display and focus the main conversational Chat Assistant window."""
+        if not self.chat_window:
+            from nlagent.ui.chat_window import ChatMainWindow
+            self.chat_window = ChatMainWindow(client=self.client)
+        self.chat_window.show()
+        self.chat_window.raise_()
+        self.chat_window.activateWindow()
 
     def show_preview_window(self) -> None:
         """Display the floating command proposal window."""

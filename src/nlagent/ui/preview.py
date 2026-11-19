@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from nlagent.ui.client import MockServiceCoreClient, get_ui_client
 from nlagent.ui.study import DisplayCondition, StudySession, StudyTask, StudyTrialRecord
+from nlagent.ui.theme import apply_app_theme, set_style_property
 
 TIER_COLORS = {
     "read_only": "#2da44e",       # Green
@@ -86,6 +87,7 @@ class PreviewWindow(QDialog):
         proposal: Optional[Mapping[str, Any]] = None,
     ) -> None:
         super().__init__(parent)
+        apply_app_theme(self)
         self.setWindowTitle("NL-OS-Agent — Safe Command Preview")
         self.resize(580, 520)
         self.client = client or get_ui_client()
@@ -103,7 +105,7 @@ class PreviewWindow(QDialog):
         # Header: Query + Tier Badge
         header_layout = QHBoxLayout()
         self.title_label = QLabel("Command Proposal Preview")
-        self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #1f2328;")
+        self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #e6edf3;")
         header_layout.addWidget(self.title_label)
 
         header_layout.addStretch()
@@ -114,7 +116,6 @@ class PreviewWindow(QDialog):
         # Input query bar
         self.query_input = QLineEdit()
         self.query_input.setPlaceholderText("Enter natural language request (e.g. 'find large log files')...")
-        self.query_input.setStyleSheet("padding: 6px 10px; font-size: 13px; border: 1px solid #d0d7de; border-radius: 6px;")
         self.query_input.returnPressed.connect(self._on_submit_query)
         layout.addWidget(self.query_input)
 
@@ -122,38 +123,29 @@ class PreviewWindow(QDialog):
         self.consequence_box = QTextEdit()
         self.consequence_box.setReadOnly(True)
         self.consequence_box.setMaximumHeight(110)
-        self.consequence_box.setStyleSheet(
-            "background-color: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 8px; font-size: 12px;"
-        )
         layout.addWidget(self.consequence_box)
 
         # Proposed Shell Command Box
         cmd_header = QLabel("Synthesized Shell Command:")
-        cmd_header.setStyleSheet("font-size: 11px; font-weight: bold; color: #57606a;")
+        cmd_header.setStyleSheet("font-size: 11px; font-weight: bold; color: #8b949e;")
         layout.addWidget(cmd_header)
 
         self.cmd_box = QLineEdit()
         self.cmd_box.setReadOnly(True)
-        self.cmd_box.setStyleSheet(
-            "background-color: #24292f; color: #57ab5a; font-family: Consolas, monospace; "
-            "font-size: 12px; padding: 6px 10px; border-radius: 4px;"
-        )
+        set_style_property(self.cmd_box, "role", "terminal")
         layout.addWidget(self.cmd_box)
 
         # Reversibility & Target Files
         target_header = QLabel("Affected Targets & Reversibility:")
-        target_header.setStyleSheet("font-size: 11px; font-weight: bold; color: #57606a;")
+        target_header.setStyleSheet("font-size: 11px; font-weight: bold; color: #8b949e;")
         layout.addWidget(target_header)
 
         self.targets_list = QListWidget()
         self.targets_list.setMaximumHeight(90)
-        self.targets_list.setStyleSheet(
-            "background-color: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; font-size: 11px;"
-        )
         layout.addWidget(self.targets_list)
 
         self.reversibility_label = QLabel("Reversibility status: Protected by quarantine rollback.")
-        self.reversibility_label.setStyleSheet("color: #0969da; font-size: 11px;")
+        self.reversibility_label.setStyleSheet("color: #58a6ff; font-size: 11px;")
         layout.addWidget(self.reversibility_label)
 
         # Action Buttons
@@ -272,6 +264,7 @@ class StudyTrialDialog(QDialog):
 
     def __init__(self, session: StudySession, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        apply_app_theme(self)
         self.session = session
         self.setWindowTitle(f"Usability Study — Participant: {session.participant.participant_id}")
         self.resize(640, 580)
@@ -288,48 +281,43 @@ class StudyTrialDialog(QDialog):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, len(self.session.tasks))
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet(
-            "QProgressBar { border: 1px solid #d0d7de; border-radius: 4px; text-align: center; height: 16px; } "
-            "QProgressBar::chunk { background-color: #0969da; }"
-        )
         layout.addWidget(self.progress_bar)
 
         # Task Header Frame
         header_frame = QFrame()
-        header_frame.setStyleSheet("background-color: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px;")
+        header_frame.setObjectName("CardFrame")
         h_layout = QVBoxLayout(header_frame)
+        h_layout.setContentsMargins(12, 10, 12, 10)
         h_layout.setSpacing(6)
 
         self.lbl_task_title = QLabel("Task Title")
-        self.lbl_task_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #1f2328;")
+        self.lbl_task_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #e6edf3;")
         h_layout.addWidget(self.lbl_task_title)
 
         self.lbl_user_request = QLabel("Natural Language Request...")
-        self.lbl_user_request.setStyleSheet("font-size: 13px; color: #24292f;")
+        self.lbl_user_request.setStyleSheet("font-size: 13px; color: #e6edf3;")
         h_layout.addWidget(self.lbl_user_request)
         layout.addWidget(header_frame)
 
         # Display Section (Condition Dependent)
         disp_header = QLabel("Proposed Agent Action Preview:")
-        disp_header.setStyleSheet("font-size: 12px; font-weight: bold; color: #57606a;")
+        disp_header.setStyleSheet("font-size: 12px; font-weight: bold; color: #8b949e;")
         layout.addWidget(disp_header)
 
         self.preview_display = QTextEdit()
         self.preview_display.setReadOnly(True)
         self.preview_display.setMaximumHeight(110)
-        self.preview_display.setStyleSheet(
-            "background-color: #ffffff; border: 2px solid #0969da; border-radius: 6px; padding: 10px; font-size: 13px;"
-        )
         layout.addWidget(self.preview_display)
 
         # Comprehension Question Box
         q_frame = QFrame()
-        q_frame.setStyleSheet("background-color: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px;")
+        q_frame.setObjectName("CardFrame")
         q_layout = QVBoxLayout(q_frame)
+        q_layout.setContentsMargins(12, 12, 12, 12)
         q_layout.setSpacing(8)
 
         self.lbl_question = QLabel("What will this command do?")
-        self.lbl_question.setStyleSheet("font-weight: bold; font-size: 12px; color: #1f2328;")
+        self.lbl_question.setStyleSheet("font-weight: bold; font-size: 12px; color: #e6edf3;")
         q_layout.addWidget(self.lbl_question)
 
         self.radio_group = QButtonGroup(self)
@@ -348,16 +336,12 @@ class StudyTrialDialog(QDialog):
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton("Cancel / Reject")
-        self.btn_cancel.setStyleSheet(
-            "background-color: #f6f8fa; color: #cf222e; font-weight: bold; padding: 8px 24px; border: 1px solid #d0d7de; border-radius: 6px;"
-        )
+        set_style_property(self.btn_cancel, "variant", "danger")
         self.btn_cancel.clicked.connect(lambda: self._on_decision_clicked("cancel"))
         btn_layout.addWidget(self.btn_cancel)
 
         self.btn_approve = QPushButton("Approve & Execute")
-        self.btn_approve.setStyleSheet(
-            "background-color: #2da44e; color: white; font-weight: bold; padding: 8px 24px; border-radius: 6px;"
-        )
+        set_style_property(self.btn_approve, "variant", "success")
         self.btn_approve.clicked.connect(lambda: self._on_decision_clicked("approve"))
         btn_layout.addWidget(self.btn_approve)
 

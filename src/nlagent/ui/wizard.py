@@ -37,6 +37,8 @@ from PySide6.QtWidgets import (
 from nlagent.context.profile import UserProfile
 from nlagent.runtime.autotune import autotune_runtime, detect_hardware
 from nlagent.runtime.manager import HardwareProfile
+from nlagent.ui.model_manager import ModelManagerWidget
+from nlagent.ui.theme import apply_app_theme
 
 
 class IntroPage(QWizardPage):
@@ -57,7 +59,7 @@ class IntroPage(QWizardPage):
             "Abstract Syntax Tree (AST) safety guards."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("font-size: 13px; color: #24292f; line-height: 1.4;")
+        desc.setStyleSheet("font-size: 13px; color: #e6edf3; line-height: 1.4;")
         layout.addWidget(desc)
 
         features_box = QTextEdit()
@@ -71,7 +73,6 @@ class IntroPage(QWizardPage):
             </ul>
             """
         )
-        features_box.setStyleSheet("background-color: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;")
         layout.addWidget(features_box)
 
 
@@ -88,13 +89,14 @@ class HardwarePage(QWizardPage):
 
         self.info_label = QLabel("Analyzing host CPU, GPU, and memory resources...")
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #57606a; font-size: 12px;")
+        self.info_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         layout.addWidget(self.info_label)
 
         # Hardware Info Grid
         form_frame = QFrame()
-        form_frame.setStyleSheet("background-color: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px;")
+        form_frame.setObjectName("CardFrame")
         form = QFormLayout(form_frame)
+        form.setContentsMargins(12, 12, 12, 12)
         form.setSpacing(8)
 
         self.lbl_cpu = QLabel("Detecting...")
@@ -167,47 +169,74 @@ class HardwarePage(QWizardPage):
 
 
 class ModelPage(QWizardPage):
-    """Model presence and integrity verification."""
+    """Real model downloader, SHA-256 verifier, local GGUF importer, and runtime check."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setTitle("Local Model Verification")
-        self.setSubTitle("Verifying quantized model file and SHA256 integrity")
+        self.setTitle("Model & Runtime Setup")
+        self.setSubTitle("Download the fine-tuned model (supports pause/resume) or import an existing local .gguf")
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         self.model_status_label = QLabel("Checking models directory...")
-        self.model_status_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #1f2328;")
+        self.model_status_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #e6edf3;")
         layout.addWidget(self.model_status_label)
 
         info_frame = QFrame()
-        info_frame.setStyleSheet("background-color: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px;")
+        info_frame.setObjectName("CardFrame")
         form = QFormLayout(info_frame)
+        form.setContentsMargins(12, 10, 12, 10)
 
-        self.lbl_model_name = QLabel("NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf")
-        self.lbl_target_path = QLabel("models/nemotron-3-nano-4b.Q4_K_M.gguf")
-        self.lbl_presence = QLabel("Present on disk")
-        self.lbl_sha = QLabel("Verified (SHA256 Match)")
+        self.lbl_model_name = QLabel("NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf")
+        self.lbl_target_path = QLabel("Checking...")
+        self.lbl_presence = QLabel("Checking...")
+        self.lbl_sha = QLabel("Pending")
 
-        form.addRow("Target Architecture:", self.lbl_model_name)
+        form.addRow("Active / Selected Model:", self.lbl_model_name)
         form.addRow("Model Location:", self.lbl_target_path)
         form.addRow("File Status:", self.lbl_presence)
         form.addRow("Integrity Check:", self.lbl_sha)
-
         layout.addWidget(info_frame)
 
-        note = QLabel(
-            "If the model is not found, NL-OS-Agent automatically uses range downloads from verified HuggingFace mirrors "
-            "or connects to an existing local llama-server instance."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #57606a; font-size: 11px;")
-        layout.addWidget(note)
+        self.manager_widget = ModelManagerWidget(parent=self)
+        self.manager_widget.model_ready_changed.connect(self._on_ready_changed)
+        self.manager_widget.active_model_selected.connect(self._on_model_selected)
+        layout.addWidget(self.manager_widget)
+
+    def _on_ready_changed(self, has_ready: bool) -> None:
+        if has_ready:
+            self.model_status_label.setText("✔ Local Model Ready for Offline Inference")
+            self.model_status_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #2da44e;")
+        else:
+            self.model_status_label.setText("⚠ No Local Model Ready — Download or Import a .gguf Below")
+            self.model_status_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #9a6700;")
+        self._sync_summary_labels()
+
+    def _on_model_selected(self, _path: str) -> None:
+        self._sync_summary_labels()
+
+    def _sync_summary_labels(self) -> None:
+        selected_path = self.manager_widget.selected_model_path()
+        st = self.manager_widget.selected_manifest_status()
+        if selected_path and selected_path.exists():
+            self.lbl_model_name.setText(selected_path.name)
+            self.lbl_target_path.setText(str(selected_path))
+            self.lbl_presence.setText("Present on disk")
+            self.lbl_sha.setText("Verified / Ready" if st and st.status == "ready" else "Local GGUF Ready")
+        elif st:
+            self.lbl_model_name.setText(st.entry.canonical_filename)
+            self.lbl_target_path.setText(str(st.local_path or "Not downloaded yet"))
+            if st.status == "partial":
+                self.lbl_presence.setText(f"Partial ({st.progress_percent:.1f}% downloaded)")
+                self.lbl_sha.setText("Resume available")
+            else:
+                self.lbl_presence.setText("Not on disk yet")
+                self.lbl_sha.setText("Click 'Download / Resume Selected' or 'Import Local .gguf'")
 
     def initializePage(self) -> None:
-        self.model_status_label.setText("✔ Local Model Ready for Offline Inference")
-        self.model_status_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #2da44e;")
+        self.manager_widget.refresh()
+        self._sync_summary_labels()
 
 
 class ProfilePage(QWizardPage):
@@ -250,7 +279,7 @@ class ProfilePage(QWizardPage):
             "preventing LLM path hallucination without reading confidential file contents."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #57606a; font-size: 11px;")
+        info.setStyleSheet("color: #8b949e; font-size: 11px;")
         layout.addWidget(info)
 
     def validatePage(self) -> bool:
@@ -288,7 +317,7 @@ class FinishPage(QWizardPage):
             "• Terminal: Use 'nlagent' or 'nlctl propose \"your command\"'\n"
             "• Shell Hook: Interactive typing in PowerShell or cmd.exe"
         )
-        summary.setStyleSheet("font-size: 13px; color: #24292f; line-height: 1.5;")
+        summary.setStyleSheet("font-size: 13px; color: #e6edf3; line-height: 1.5;")
         layout.addWidget(summary)
 
         self.chk_start_service = QCheckBox("Start background Core Service daemon immediately")
@@ -301,8 +330,9 @@ class SetupWizard(QWizard):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        apply_app_theme(self)
         self.setWindowTitle("NL-OS-Agent — First-Run Setup Wizard")
-        self.resize(680, 520)
+        self.resize(740, 620)
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
 
         self.addPage(IntroPage(self))

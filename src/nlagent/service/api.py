@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -43,6 +44,22 @@ class ServiceAPI:
         self.db_path = db_path
         self.shutdown_callback = shutdown_callback
         self.version = "0.1.0"
+        self._sessions: dict[str, Any] = {}
+        self._sessions_lock = threading.Lock()
+
+    def get_session(self, session_id: str | None, cwd: str) -> Any:
+        """Return or initialize a persistent SessionState for multi-turn chat sessions."""
+        from nlagent.context.state import SessionState
+
+        sid = session_id or "default"
+        with self._sessions_lock:
+            sess = self._sessions.get(sid)
+            if sess is None:
+                sess = SessionState(cwd=cwd)
+                self._sessions[sid] = sess
+            elif cwd and os.path.isdir(cwd) and sess.cwd != cwd:
+                sess.update_cwd(cwd)
+            return sess
 
     def verify_auth(self, headers: Mapping[str, str]) -> tuple[bool, int, str]:
         """Verify Bearer token authorization header."""
@@ -78,19 +95,24 @@ class ServiceAPI:
 
         cwd = body.get("cwd") or os.getcwd()
         mock_cmd = body.get("mock")
+        shell = body.get("shell")
+        session_id = body.get("session_id")
+        endpoint_override = body.get("endpoint_url")
 
         from nlagent.backends.llama_server import LlamaServerBackend, resolve_local_endpoint
         from nlagent.cache.verified_cache import VerifiedCommandCache
         from nlagent.cli.db import SQLiteStateStore
-        from nlagent.context.state import SessionState
         from nlagent.daemon.propose import get_default_env, propose
+        from nlagent.safety.renderer import ExecutionPlan
 
-        session = SessionState(cwd=cwd)
+        session = self.get_session(session_id, cwd)
         cache = VerifiedCommandCache(threshold=0.88)
-        env = get_default_env(cwd=cwd)
+        env = get_default_env(cwd=session.cwd, shell=shell)
 
         from nlagent.config import AgentConfig
         agent_cfg = AgentConfig.from_env()
+        if endpoint_override:
+            agent_cfg.endpoint_url = str(endpoint_override)
 
         if mock_cmd:
             backend = lambda prompt: json.dumps({
@@ -103,8 +125,9 @@ class ServiceAPI:
             if mock_env:
                 backend = lambda prompt: mock_env
             else:
+                target_endpoint = endpoint_override or resolve_local_endpoint(agent_cfg.endpoint_url)
                 backend = LlamaServerBackend(
-                    endpoint_url=resolve_local_endpoint(),
+                    endpoint_url=target_endpoint,
                     reasoning=agent_cfg.reasoning,
                     timeout=agent_cfg.timeout,
                 )
@@ -124,11 +147,24 @@ class ServiceAPI:
 
         import uuid
         proposal_id = body.get("id") or f"p_{uuid.uuid4().hex[:8]}"
-        cmd = res.get("command", "").strip()
+        cmd = str(res.get("command") or "").strip()
         tier = res.get("tier", "read_only")
         targets = res.get("targets", [])
         preview_text = res.get("preview", "")
         explanation = res.get("explanation", "")
+        clarifying_q = res.get("clarifying_question")
+        needs_clar = bool(res.get("needs_clarification"))
+        is_cached = bool(res.get("cached"))
+
+        plan = ExecutionPlan.create(
+            command=cmd,
+            cwd=session.cwd,
+            tier=tier,
+            effect=res.get("effect"),
+            explanation=explanation,
+        )
+        plain_english = plan.plain_english_description or preview_text
+        reversible = plan.effect_summary.is_reversible
 
         # Persist to state database
         try:
@@ -138,7 +174,7 @@ class ServiceAPI:
                 request=req_text,
                 command=cmd,
                 tier=tier,
-                cwd=cwd,
+                cwd=session.cwd,
                 preview_text=preview_text,
                 explanation=explanation,
                 targets=targets,
@@ -152,9 +188,16 @@ class ServiceAPI:
             "command": cmd,
             "tier": tier,
             "targets": targets,
-            "preview": preview_text,
+            "preview": plain_english,
+            "plain_english": plain_english,
             "explanation": explanation,
-            "cwd": cwd,
+            "clarifying_question": clarifying_q,
+            "needs_clarification": needs_clar,
+            "cached": is_cached,
+            "reversible": reversible,
+            "cwd": session.cwd,
+            "shell": env.get("shell", shell or "powershell"),
+            "session_id": session_id or "default",
         }
 
     def handle_commit(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -175,12 +218,13 @@ class ServiceAPI:
         cwd = proposal_record.get("cwd") or os.getcwd()
         pid = proposal_record.get("id", proposal_id or "p_unknown")
 
-        from nlagent.context.state import SessionState
         from nlagent.daemon.commit import commit
         from nlagent.safety.effects import analyse, preview, tier_from_effect
         from nlagent.safety.quarantine import QuarantineLimitExceededError
 
-        session = SessionState(cwd=cwd)
+        session_id = body.get("session_id")
+        shell = body.get("shell")
+        session = self.get_session(session_id, cwd)
         allow_privileged = bool(body.get("allow_privileged", False))
         no_quarantine = bool(body.get("no_quarantine", False))
         confirmed_large = bool(body.get("confirmed_large", False))
@@ -230,6 +274,7 @@ class ServiceAPI:
             allow_privileged=allow_privileged,
             enable_quarantine=not no_quarantine,
             confirmed_large_quarantine=confirmed_large,
+            shell=shell,
         )
 
         q_id = proposal_record.get("quarantine_id") or (pid if fresh_effect.deletes or fresh_effect.overwrites else None)
@@ -249,6 +294,7 @@ class ServiceAPI:
             "exit_code": exit_code,
             "output": output,
             "quarantine_id": q_id,
+            "cwd": session.cwd,
         }
 
     def handle_undo(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:

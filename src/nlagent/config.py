@@ -34,8 +34,9 @@ class AgentConfig:
     def from_env(cls) -> "AgentConfig":
         """Instantiate AgentConfig with environment variable overrides."""
         reasoning_env = os.environ.get("NLAGENT_REASONING", "").strip().lower()
-        reasoning = True
-        if reasoning_env in ("0", "false", "off", "no"):
+        if reasoning_env in ("1", "true", "on", "yes"):
+            reasoning = True
+        else:
             reasoning = False
 
         endpoint_url = os.environ.get(

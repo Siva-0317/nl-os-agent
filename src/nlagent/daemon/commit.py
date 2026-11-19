@@ -94,13 +94,19 @@ def _should_use_bash_on_windows(command: str) -> bool:
     return first_word in ("ls", "rm", "find", "grep", "cat", "head", "tail", "wc", "touch", "chmod", "chown", "ln")
 
 
-def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
+def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tuple[str, int]:
     """Execute shell command in target working directory with timeout handling."""
     if not command or not command.strip():
         return "", 0
 
-    bash_exe = get_preferred_shell()
-    use_bash = bool(bash_exe and (sys.platform != "win32" or _should_use_bash_on_windows(command)))
+    req_shell = (shell or os.environ.get("NLAGENT_SHELL", "")).strip().lower()
+    bash_exe = get_preferred_shell() if req_shell != "cmd" and req_shell != "powershell" else (get_preferred_shell() if req_shell == "bash" else None)
+    if req_shell == "bash":
+        use_bash = bool(bash_exe)
+    elif req_shell in ("cmd", "powershell"):
+        use_bash = False
+    else:
+        use_bash = bool(bash_exe and (sys.platform != "win32" or _should_use_bash_on_windows(command)))
 
     try:
         if use_bash and bash_exe:
@@ -189,15 +195,7 @@ def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
                         rel_matches = [os.path.relpath(m, cwd).replace("\\", "/") for m in matches]
                         return "\n".join(rel_matches), 0
 
-                # Try PowerShell first, fallback to cmd.exe shell=True
-                proc = subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-                    capture_output=True,
-                    text=True,
-                    cwd=cwd,
-                    timeout=45,
-                )
-                if proc.returncode != 0:
+                if req_shell == "cmd":
                     proc = subprocess.run(
                         command,
                         shell=True,
@@ -206,6 +204,27 @@ def default_shell_runner(command: str, cwd: str) -> tuple[str, int]:
                         cwd=cwd,
                         timeout=45,
                     )
+                else:
+                    # Execute via PowerShell
+                    proc = subprocess.run(
+                        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                        capture_output=True,
+                        text=True,
+                        cwd=cwd,
+                        timeout=45,
+                    )
+                    # Only fallback to cmd.exe if shell preference is not powershell and command is not a PowerShell cmdlet
+                    if proc.returncode != 0 and req_shell != "powershell":
+                        is_ps_cmdlet = bool(re.match(r"^[A-Z][a-zA-Z]+-[A-Z][a-zA-Z]+", command.strip()))
+                        if not is_ps_cmdlet:
+                            proc = subprocess.run(
+                                command,
+                                shell=True,
+                                capture_output=True,
+                                text=True,
+                                cwd=cwd,
+                                timeout=45,
+                            )
             else:
                 proc = subprocess.run(
                     command,
@@ -239,6 +258,7 @@ def commit(
     confirmed_large_quarantine: bool = False,
     quarantine_base_dir: str | Path | None = None,
     env: dict[str, Any] | None = None,
+    shell: str | None = None,
 ) -> tuple[str, int, Effect]:
     """
     Commit and execute a previously proposed command.
@@ -306,8 +326,12 @@ def commit(
             return err_msg, 126, fresh_effect
 
     # 5. Execute
-    exec_fn = runner if runner is not None else default_shell_runner
-    output, exit_code = exec_fn(command, session_state.cwd)
+    if runner is not None:
+        output, exit_code = runner(command, session_state.cwd)
+    elif shell:
+        output, exit_code = default_shell_runner(command, session_state.cwd, shell=shell)
+    else:
+        output, exit_code = default_shell_runner(command, session_state.cwd)
 
     # 4. State updates on success
     if exit_code == 0:

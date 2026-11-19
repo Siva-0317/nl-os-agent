@@ -299,9 +299,26 @@ class ServiceClient:
         self.opener = opener
         self.timeout = timeout
         self.info: ServiceInfo | None = None
+        self._sessions: dict[str, Any] = {}
+        self._sessions_lock = threading.Lock()
 
-    def _get_opener(self) -> urllib.request.OpenerDirector:
-        return self.opener or urllib.request._opener or urllib.request.build_opener()
+    def _get_local_session(self, session_id: str | None, cwd: str) -> Any:
+        from nlagent.context.state import SessionState
+
+        sid = session_id or "default"
+        with self._sessions_lock:
+            sess = self._sessions.get(sid)
+            if sess is None:
+                sess = SessionState(cwd=cwd)
+                self._sessions[sid] = sess
+            elif cwd and os.path.isdir(cwd) and sess.cwd != cwd:
+                sess.update_cwd(cwd)
+            return sess
+
+    def _open_url(self, req: urllib.request.Request, timeout: float) -> Any:
+        if self.opener is not None:
+            return self.opener.open(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
 
     def refresh(self) -> ServiceInfo | None:
         """Check for active service.json."""
@@ -328,7 +345,7 @@ class ServiceClient:
         # Probe health endpoint
         try:
             req = urllib.request.Request(f"{info.url}/health")
-            with self._get_opener().open(req, timeout=1.0) as resp:
+            with self._open_url(req, timeout=1.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 return data.get("status") == "ok"
         except Exception:
@@ -354,7 +371,7 @@ class ServiceClient:
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
         try:
-            with self._get_opener().open(req, timeout=self.timeout) as resp:
+            with self._open_url(req, timeout=self.timeout) as resp:
                 code = getattr(resp, "status", None) or getattr(resp, "code", 200)
                 resp_bytes = resp.read()
                 data = json.loads(resp_bytes.decode("utf-8")) if resp_bytes else {}
@@ -376,15 +393,23 @@ class ServiceClient:
         cwd: str | None = None,
         mock: str | None = None,
         session_id: str | None = None,
+        shell: str | None = None,
+        endpoint_url: str | None = None,
     ) -> dict[str, Any]:
         """Request command proposal from service, with in-process fallback."""
         if self.is_service_running():
             try:
-                code, res = self._call(
-                    "POST",
-                    "/propose",
-                    {"request": request, "cwd": cwd or os.getcwd(), "mock": mock, "session_id": session_id},
-                )
+                payload: dict[str, Any] = {
+                    "request": request,
+                    "cwd": cwd or os.getcwd(),
+                    "mock": mock,
+                    "session_id": session_id,
+                }
+                if shell:
+                    payload["shell"] = shell
+                if endpoint_url:
+                    payload["endpoint_url"] = endpoint_url
+                code, res = self._call("POST", "/propose", payload)
                 if code == 200:
                     return res
             except Exception as e:
@@ -396,15 +421,16 @@ class ServiceClient:
         from nlagent.cache.verified_cache import VerifiedCommandCache
         from nlagent.cli.db import SQLiteStateStore
         from nlagent.config import AgentConfig
-        from nlagent.context.state import SessionState
         from nlagent.daemon.propose import get_default_env, propose
         from nlagent.safety.renderer import ExecutionPlan
 
         active_cwd = cwd or os.getcwd()
-        session = SessionState(cwd=active_cwd)
+        session = self._get_local_session(session_id, active_cwd)
         cache = VerifiedCommandCache(threshold=0.88)
-        env = get_default_env(cwd=active_cwd)
+        env = get_default_env(cwd=session.cwd, shell=shell)
         agent_cfg = AgentConfig.from_env()
+        if endpoint_url:
+            agent_cfg.endpoint_url = endpoint_url
 
         if mock:
             backend = lambda p: json.dumps({
@@ -414,7 +440,7 @@ class ServiceClient:
             })
         else:
             backend = LlamaServerBackend(
-                endpoint_url=resolve_local_endpoint(),
+                endpoint_url=endpoint_url or resolve_local_endpoint(agent_cfg.endpoint_url),
                 reasoning=agent_cfg.reasoning,
                 timeout=agent_cfg.timeout,
             )
@@ -430,11 +456,12 @@ class ServiceClient:
 
         proposal_id = f"p_{uuid.uuid4().hex[:8]}"
         res["id"] = proposal_id
-        cmd = str(res.get("command", "")).strip()
+        cmd = str(res.get("command") or "").strip()
+        res["command"] = cmd
         tier = str(res.get("tier", "read_only"))
         plan = ExecutionPlan.create(
             command=cmd,
-            cwd=active_cwd,
+            cwd=session.cwd,
             tier=tier,
             effect=res.get("effect"),
             explanation=str(res.get("explanation", "")),
@@ -443,6 +470,9 @@ class ServiceClient:
         res["plain_english"] = plan.plain_english_description
         if plan.plain_english_description:
             res["preview"] = plan.plain_english_description
+        res["cwd"] = session.cwd
+        res["shell"] = env.get("shell", shell or "powershell")
+        res["session_id"] = session_id or "default"
 
         try:
             db = SQLiteStateStore(db_path=self.db_path)
@@ -451,7 +481,7 @@ class ServiceClient:
                 request=request,
                 command=cmd,
                 tier=tier,
-                cwd=active_cwd,
+                cwd=session.cwd,
                 preview_text=str(res.get("preview", "")),
                 explanation=str(res.get("explanation", "")),
                 targets=list(res.get("targets", [])),
@@ -469,22 +499,25 @@ class ServiceClient:
         no_quarantine: bool = False,
         confirmed_large: bool = False,
         emit_shell: bool = False,
+        session_id: str | None = None,
+        shell: str | None = None,
         **_: Any,
     ) -> tuple[int, dict[str, Any]]:
         """Request command execution commit from service, with in-process fallback."""
         if self.is_service_running():
             try:
-                code, res = self._call(
-                    "POST",
-                    "/commit",
-                    {
-                        "id": proposal_id,
-                        "allow_privileged": allow_privileged,
-                        "no_quarantine": no_quarantine,
-                        "confirmed_large": confirmed_large,
-                        "emit_shell": emit_shell,
-                    },
-                )
+                payload: dict[str, Any] = {
+                    "id": proposal_id,
+                    "allow_privileged": allow_privileged,
+                    "no_quarantine": no_quarantine,
+                    "confirmed_large": confirmed_large,
+                    "emit_shell": emit_shell,
+                }
+                if session_id:
+                    payload["session_id"] = session_id
+                if shell:
+                    payload["shell"] = shell
+                code, res = self._call("POST", "/commit", payload)
                 if code in (200, 403, 413):
                     return res.get("exit_code", 0), res
             except Exception as e:
@@ -492,7 +525,6 @@ class ServiceClient:
 
         # Fallback to in-process commit
         from nlagent.cli.db import SQLiteStateStore
-        from nlagent.context.state import SessionState
         from nlagent.daemon.commit import commit
 
         db = SQLiteStateStore(db_path=self.db_path)
@@ -500,28 +532,34 @@ class ServiceClient:
         if not rec:
             return 1, {"error": f"Proposal '{proposal_id}' not found"}
 
-        session = SessionState(cwd=rec.get("cwd", os.getcwd()))
-        output, exit_code, _ = commit(
+        session = self._get_local_session(session_id, rec.get("cwd", os.getcwd()))
+        output, exit_code, fresh_effect = commit(
             proposal=rec,
             session_state=session,
             allow_privileged=allow_privileged,
             enable_quarantine=not no_quarantine,
             confirmed_large_quarantine=confirmed_large,
+            shell=shell,
         )
+        q_id = rec.get("quarantine_id") or (proposal_id if fresh_effect.deletes or fresh_effect.overwrites else None)
+        status = "committed" if exit_code == 0 else ("blocked" if exit_code == 126 else "failed")
         try:
             db.update_proposal_status(
                 proposal_id=proposal_id,
-                status="committed" if exit_code == 0 else "blocked",
-                quarantine_id=rec.get("quarantine_id"),
+                status=status,
+                quarantine_id=q_id,
                 exit_code=exit_code,
                 output=output,
             )
         except Exception:
             pass
         return exit_code, {
-            "status": "committed" if exit_code == 0 else "blocked",
+            "id": proposal_id,
+            "status": status,
             "output": output,
             "exit_code": exit_code,
+            "quarantine_id": q_id,
+            "cwd": session.cwd,
         }
 
     def undo(self, target_id: str | None = None, on_clash: str = "error") -> dict[str, Any]:
@@ -530,6 +568,8 @@ class ServiceClient:
             try:
                 code, res = self._call("POST", "/undo", {"id": target_id, "on_clash": on_clash})
                 if code in (200, 400, 404, 409):
+                    if "restored_count" not in res:
+                        res["restored_count"] = len(res.get("restored_paths", []))
                     return res
             except Exception as e:
                 logger.debug("Service undo call failed; falling back to in-process: %s", e)
@@ -548,18 +588,25 @@ class ServiceClient:
             target_id = latest.get("quarantine_id") or latest.get("id") if latest else None
 
         if not target_id:
-            return {"success": False, "message": "No executed proposal found to undo"}
+            return {"success": False, "restored_count": 0, "message": "No executed proposal found to undo"}
 
         try:
             res = quarantine_undo(request_id=target_id, on_clash=on_clash)
             return {
                 "success": res.success,
                 "message": res.message,
+                "restored_count": len(res.restored_paths),
                 "restored_paths": [str(p) for p in res.restored_paths],
                 "failed_paths": [str(p) for p in res.failed_paths],
             }
         except (QuarantineNotFoundError, NameClashError, Exception) as exc:
-            return {"success": False, "error": str(exc), "message": str(exc), "failed_paths": []}
+            return {
+                "success": False,
+                "restored_count": 0,
+                "error": str(exc),
+                "message": str(exc),
+                "failed_paths": [],
+            }
 
     def models(self) -> list[dict[str, Any]]:
         """Query available models from service or fallback to models module."""

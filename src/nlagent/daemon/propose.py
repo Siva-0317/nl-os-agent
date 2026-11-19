@@ -28,38 +28,47 @@ from nlagent.safety.effects import Effect, analyse, preview, tier_from_effect
 
 DEFAULT_L0_SYSTEM_PROMPT = (
     "You are an AI-native operating system shell agent.\n"
-    "Convert user natural language requests into exact, safe terminal commands matching the active OS and Shell.\n"
-    "When Shell is 'powershell', emit valid PowerShell cmdlets (e.g., 'Get-ChildItem -Hidden', 'Get-ChildItem -Force', 'Get-ChildItem -Directory') with Windows paths ('C:\\\\Windows\\\\System32', 'C:\\\\ProgramData', 'C:\\\\') and never mix bash flags like 'ls -la'. Avoid scanning entire drive roots with '-Recurse' unless explicitly asked.\n"
-    "You MUST respond ONLY with a single valid JSON object matching this schema:\n"
+    "Convert user natural language requests into exact, safe terminal commands matching the active OS, Shell, and CWD.\n"
+    "- Strictly obey the Shell field in environment context: on 'powershell', emit valid PowerShell cmdlets ('Get-ChildItem -Hidden', 'Get-ChildItem -Force', 'New-Item -ItemType Directory', 'Set-Content', 'Rename-Item') with Windows paths ('C:\\\\Windows\\\\System32', 'C:\\\\ProgramData', 'C:\\\\') and never mix bash flags; on 'bash' or 'zsh', always emit POSIX commands ('ls -la /c/Windows/System32', 'find', 'grep') and never mix PowerShell or cmd commands like 'findstr'.\n"
+    "- Avoid '-Recurse' (or deep recursive scans) on large directories or drive roots unless the user explicitly asks to search subdirectories/recursively.\n"
+    "- Prefer paths relative to CWD for local workspace files unless an explicit path or external folder is shown in FILES.\n"
+    "- If a destructive/ambiguous request lacks a clear target, set 'command' to null and ask a brief 'clarifying_question'.\n"
+    "Output ONLY a single valid JSON object matching this schema:\n"
     "{\n"
-    '  "command": "<exact shell command string>",\n'
+    '  "command": "<exact shell command string or null>",\n'
     '  "targets": ["<list>", "<of>", "<targets>"],\n'
+    '  "clarifying_question": "<short question if ambiguous, otherwise null>",\n'
     '  "explanation": "<short rationale>"\n'
     "}\n"
     "Do not include markdown fences, comments, or any extra text outside the JSON."
 )
 
 
-def get_default_env(cwd: str | None = None) -> dict[str, Any]:
+def get_default_env(cwd: str | None = None, shell: str | None = None) -> dict[str, Any]:
     """Inspect the local environment and build a deterministic L1 dictionary."""
     os_name = platform.system()
+    shell_pref = (shell or os.environ.get("NLAGENT_SHELL", "")).strip().lower()
     if os_name == "Darwin":
         clean_os = f"macOS {platform.mac_ver()[0]}"
-        default_shell = os.environ.get("SHELL", "zsh").split("/")[-1]
+        default_shell = shell_pref or os.environ.get("SHELL", "zsh").split("/")[-1]
         path_style = "posix"
     elif os_name == "Linux":
         clean_os = "Linux (Ubuntu/Debian)"
-        default_shell = os.environ.get("SHELL", "bash").split("/")[-1]
+        default_shell = shell_pref or os.environ.get("SHELL", "bash").split("/")[-1]
         path_style = "posix"
     else:
         clean_os = "Windows 11"
-        shell_pref = os.environ.get("NLAGENT_SHELL", "powershell").strip().lower()
-        default_shell = "bash" if (shell_pref == "bash" and shutil.which("bash")) else "powershell"
+        if shell_pref == "bash" and shutil.which("bash"):
+            default_shell = "bash"
+        elif shell_pref == "cmd":
+            default_shell = "cmd"
+        else:
+            default_shell = "powershell"
         path_style = "posix" if default_shell == "bash" else "windows"
 
     user = getpass.getuser() or "user"
 
-    if default_shell == "powershell":
+    if default_shell in ("powershell", "cmd"):
         candidate_tools = [
             "cmd", "curl", "findstr", "git", "pip", "powershell", "python", "robocopy", "tar",
         ]
@@ -283,13 +292,17 @@ def propose(
             backend = LlamaServerBackend(endpoint_url=resolve_local_endpoint(), reasoning=active_reasoning)
 
         if hasattr(backend, "complete"):
-            res = backend.complete(
-                prompt=prompt_parts.full_text,
-                cache_prompt=True,
-                temperature=active_temperature,
-                n_predict=active_n_predict,
-                reasoning=active_reasoning,
-            )
+            from nlagent.backends.llama_server import LlamaServerBackend
+            complete_kwargs: dict[str, Any] = {
+                "prompt": prompt_parts.full_text,
+                "cache_prompt": True,
+                "temperature": active_temperature,
+                "n_predict": active_n_predict,
+                "reasoning": active_reasoning,
+            }
+            if isinstance(backend, LlamaServerBackend):
+                complete_kwargs["system_prompt"] = prompt_parts.prefix_text.strip()
+            res = backend.complete(**complete_kwargs)
             if getattr(res, "status", "success") == "error" and getattr(res, "error", None):
                 raise RuntimeError(f"Connection or backend error: {res.error}")
             raw_output = res.content if hasattr(res, "content") else str(res)
@@ -306,13 +319,16 @@ def propose(
                     request=resolved_request,
                     reasoning=False,
                 )
-                res_retry = backend.complete(
-                    prompt=fallback_parts.full_text,
-                    cache_prompt=True,
-                    temperature=active_temperature,
-                    n_predict=active_n_predict,
-                    reasoning=False,
-                )
+                retry_kwargs: dict[str, Any] = {
+                    "prompt": fallback_parts.full_text,
+                    "cache_prompt": True,
+                    "temperature": active_temperature,
+                    "n_predict": active_n_predict,
+                    "reasoning": False,
+                }
+                if isinstance(backend, LlamaServerBackend):
+                    retry_kwargs["system_prompt"] = fallback_parts.prefix_text.strip()
+                res_retry = backend.complete(**retry_kwargs)
                 if getattr(res_retry, "status", "success") == "error" and getattr(res_retry, "error", None):
                     raise RuntimeError(f"Connection or backend error: {res_retry.error}")
                 raw_output = res_retry.content if hasattr(res_retry, "content") else str(res_retry)

@@ -47,6 +47,8 @@ PS_ALIASES: dict[str, str] = {
     "start": "Start-Process",
     "ni": "New-Item",
     "md": "New-Item",
+    "rni": "Rename-Item",
+    "ren": "Rename-Item",
     "sp": "Set-ItemProperty",
     "rp": "Remove-ItemProperty",
     "clp": "Clear-ItemProperty",

@@ -75,7 +75,10 @@ class EvalResult:
 
 def normalize_rel_path(path: str) -> str:
     """Normalize path keys to forward slashes for cross-platform consistency."""
-    return path.replace("\\", "/").strip("./")
+    norm = path.replace("\\", "/").strip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm
 
 
 def normalize_stdout(stdout: str) -> str:
@@ -97,15 +100,51 @@ def normalize_stdout(stdout: str) -> str:
     return "\n".join(normalized_lines)
 
 
-def compare_stdout(cand_stdout: str, ref_stdout: str) -> bool:
+def normalize_workdir_paths(stdout: str, workdir: str | Path | None) -> str:
+    """Replace temporary working directory paths (Windows, POSIX, and MSYS) with '<WORKDIR>'."""
+    if not stdout:
+        return ""
+    text = stdout
+    if workdir is not None:
+        w_path = Path(workdir)
+        variants: set[str] = set()
+        for raw_w in (str(workdir), str(w_path.resolve())):
+            if not raw_w:
+                continue
+            variants.add(raw_w)
+            fwd = raw_w.replace("\\", "/")
+            variants.add(fwd)
+            # MSYS / Git Bash drive mount: C:/Users/... -> /c/Users/...
+            if len(fwd) >= 2 and fwd[1] == ":":
+                msys_drive = "/" + fwd[0].lower() + fwd[2:]
+                variants.add(msys_drive)
+            # Git Bash mounts Windows %TEMP% directories under /tmp/<dirname>
+            if w_path.name:
+                variants.add(f"/tmp/{w_path.name}")
+
+        flags = re.IGNORECASE if os.name == "nt" else 0
+        for variant in sorted((v for v in variants if v), key=len, reverse=True):
+            text = re.sub(re.escape(variant), "<WORKDIR>", text, flags=flags)
+
+    # Normalize volatile free-disk-space footer emitted by Windows `dir`
+    text = re.sub(r"([\d,]+)\s+bytes free\b", "<FREE> bytes free", text, flags=re.IGNORECASE)
+    return text
+
+
+def compare_stdout(
+    cand_stdout: str,
+    ref_stdout: str,
+    cand_dir: str | Path | None = None,
+    ref_dir: str | Path | None = None,
+) -> bool:
     """Compare stdout between candidate and reference executions.
-    
+
     Returns True if:
-    1. Direct normalized strings match identically, OR
+    1. Direct normalized strings match identically (modulo sandbox workdir paths), OR
     2. The multiline set of outputs matches (for unordered outputs like find or ls).
     """
-    norm_cand = normalize_stdout(cand_stdout)
-    norm_ref = normalize_stdout(ref_stdout)
+    norm_cand = normalize_stdout(normalize_workdir_paths(cand_stdout, cand_dir))
+    norm_ref = normalize_stdout(normalize_workdir_paths(ref_stdout, ref_dir))
 
     if norm_cand == norm_ref:
         return True
@@ -217,24 +256,72 @@ def run_command(
             cmd_args = ["/bin/sh", "-c", cmd_str]
     elif shell == "powershell":
         cmd_args = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd_str]
+    elif shell == "cmd":
+        cmd_args = ["cmd", "/c", cmd_str]
     elif shell in ("bash", "sh"):
         cmd_args = [shell, "-c", cmd_str]
     else:
         cmd_args = [shell, "-c", cmd_str]
 
+    proc: subprocess.Popen[str] | None = None
     try:
-        proc = subprocess.run(
-            cmd_args,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(cwd),
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "errors": "replace",
+        }
+        if not is_windows:
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(cmd_args, **popen_kwargs)
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            if is_windows:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        timeout=3.0,
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    import signal
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.communicate(timeout=2.0)
+            except Exception:
+                pass
         return -1, "", f"Command timed out after {timeout} seconds"
     except Exception as e:
         return -1, "", f"Execution error: {e}"
+
+
+def _strip_transient_test_artifacts(diff_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Remove Python test-runner cache metadata (.pytest_cache, __pycache__) from diff lists."""
+    cleaned: dict[str, list[str]] = {}
+    for key, paths in diff_map.items():
+        kept: list[str] = []
+        for p in paths:
+            norm_p = normalize_rel_path(p)
+            parts = norm_p.split("/")
+            if any(part in (".pytest_cache", "__pycache__") for part in parts):
+                continue
+            kept.append(p)
+        cleaned[key] = kept
+    return cleaned
 
 
 def evaluate_case(
@@ -281,12 +368,17 @@ def evaluate_case(
         diff_ref = diff(before_ref, after_ref)
         diff_cand = diff(before_cand, after_cand)
 
+        if re.search(r"\b(pytest|py\.test|unittest)\b", candidate_command.lower()):
+            diff_cand = _strip_transient_test_artifacts(diff_cand)
+        if re.search(r"\b(pytest|py\.test|unittest)\b", case.reference_command.lower()):
+            diff_ref = _strip_transient_test_artifacts(diff_ref)
+
         # Automatically determine if reference command is read-only
         has_ref_state_changes = any(bool(diff_ref[k]) for k in ("deleted", "created", "modified", "perm"))
         is_read_only = case.is_read_only or (not has_ref_state_changes)
 
         diff_match, diff_reason = compare_manifests(diff_cand, diff_ref, after_cand, after_ref)
-        stdout_match = compare_stdout(cand_stdout, ref_stdout)
+        stdout_match = compare_stdout(cand_stdout, ref_stdout, cand_dir=cand_dir, ref_dir=ref_dir)
 
         # Evaluation verdict
         success = False

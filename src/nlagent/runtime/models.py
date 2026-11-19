@@ -65,6 +65,11 @@ class InsufficientRAMError(ModelError):
     pass
 
 
+class DownloadCancelledError(ModelError):
+    """Raised when user pauses or cancels an in-progress download."""
+    pass
+
+
 # -----------------------------------------------------------------------------
 # 2. Data Structures
 # -----------------------------------------------------------------------------
@@ -81,6 +86,8 @@ class ModelEntry:
     url: str = ""
     filename: str = ""
     description: str = ""
+    recommended: bool = False
+    is_finetuned: bool = False
 
     @property
     def canonical_filename(self) -> str:
@@ -103,6 +110,8 @@ class ModelEntry:
             "url": self.url,
             "filename": self.canonical_filename,
             "description": self.description,
+            "recommended": self.recommended,
+            "is_finetuned": self.is_finetuned,
         }
 
     @classmethod
@@ -121,6 +130,8 @@ class ModelEntry:
             url=str(data.get("url", "")).strip(),
             filename=str(data.get("filename", "")).strip(),
             description=str(data.get("description", "")).strip(),
+            recommended=bool(data.get("recommended", False)),
+            is_finetuned=bool(data.get("is_finetuned", False)),
         )
 
 
@@ -229,7 +240,11 @@ def resolve_manifest_path(path: str | Path | None = None) -> Path:
         Path.cwd() / "models" / "manifest.json",
         Path.cwd() / "manifest.json",
         Path(__file__).resolve().parent.parent.parent.parent / "models" / "manifest.json",
+        Path(sys.executable).resolve().parent / "models" / "manifest.json",
     ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "models" / "manifest.json")
     for c in candidates:
         if c.exists():
             return c.resolve()
@@ -342,6 +357,7 @@ def download_model(
     progress_callback: Callable[[int, int | None], None] | None = None,
     opener: urllib.request.OpenerDirector | None = None,
     force: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> Path:
     """
     Download model file using resumable HTTP Range requests.
@@ -403,10 +419,14 @@ def download_model(
         headers["Range"] = f"bytes={existing_bytes}-"
 
     req = urllib.request.Request(download_url, headers=headers)
-    active_opener = opener or urllib.request._opener or urllib.request.build_opener()
+
+    def _open_request(r: urllib.request.Request) -> Any:
+        if opener is not None:
+            return opener.open(r, timeout=timeout)
+        return urllib.request.urlopen(r, timeout=timeout)
 
     try:
-        resp = active_opener.open(req, timeout=timeout)
+        resp = _open_request(req)
     except urllib.error.HTTPError as e:
         if e.code == 416:
             # Range not satisfiable: existing bytes might already equal full file
@@ -417,7 +437,7 @@ def download_model(
             part_path.unlink(missing_ok=True)
             existing_bytes = 0
             req = urllib.request.Request(download_url, headers={"User-Agent": "NLAgent-ModelDownloader/1.0"})
-            resp = active_opener.open(req, timeout=timeout)
+            resp = _open_request(req)
         else:
             raise
 
@@ -454,6 +474,8 @@ def download_model(
     # 6. Stream content to .part file
     with open(part_path, mode) as f:
         while True:
+            if cancel_check and cancel_check():
+                raise DownloadCancelledError(f"Download paused/cancelled for {target_name}; partial saved for resume.")
             chunk = resp.read(chunk_size)
             if not chunk:
                 break
@@ -585,31 +607,57 @@ def get_model_path(
     return None
 
 
+def get_search_model_dirs(models_dir: str | Path | None = None) -> list[Path]:
+    """Return ordered list of directories to inspect for ready GGUF models."""
+    dirs: list[Path] = []
+    primary = get_models_dir(models_dir)
+    dirs.append(primary)
+    if models_dir is None:
+        extras = [
+            Path.cwd() / "models",
+            Path(sys.executable).resolve().parent / "models",
+            Path(__file__).resolve().parent.parent.parent.parent / "models",
+        ]
+        seen = {str(primary.resolve()).lower()}
+        for cand in extras:
+            try:
+                resolved = cand.resolve()
+                key = str(resolved).lower()
+                if key not in seen and resolved.is_dir():
+                    seen.add(key)
+                    dirs.append(resolved)
+            except Exception:
+                continue
+    return dirs
+
+
 def get_model_status(
     entry: ModelEntry,
     models_dir: str | Path | None = None,
 ) -> ModelStatus:
     """Inspect model presence, partial state, and RAM compatibility."""
-    store = get_models_dir(models_dir)
-    final_path = store / entry.canonical_filename
-    part_path = store / f"{entry.canonical_filename}.part"
+    search_dirs = get_search_model_dirs(models_dir)
+    primary = search_dirs[0]
 
     sys_ram = detect_ram()
     has_ram = sys_ram.total_gb >= entry.min_ram_gb
 
-    if final_path.exists():
-        downloaded = final_path.stat().st_size
-        return ModelStatus(
-            entry=entry,
-            status="ready",
-            local_path=final_path,
-            downloaded_bytes=downloaded,
-            total_bytes=entry.size or downloaded,
-            has_sufficient_ram=has_ram,
-            system_ram_gb=sys_ram.total_gb,
-        )
+    for store in search_dirs:
+        final_path = store / entry.canonical_filename
+        if final_path.is_file():
+            downloaded = final_path.stat().st_size
+            return ModelStatus(
+                entry=entry,
+                status="ready",
+                local_path=final_path,
+                downloaded_bytes=downloaded,
+                total_bytes=entry.size or downloaded,
+                has_sufficient_ram=has_ram,
+                system_ram_gb=sys_ram.total_gb,
+            )
 
-    if part_path.exists():
+    part_path = primary / f"{entry.canonical_filename}.part"
+    if part_path.is_file():
         downloaded = part_path.stat().st_size
         return ModelStatus(
             entry=entry,
@@ -639,4 +687,125 @@ def list_models_status(
     """Inspect status of all models listed in manifest."""
     manifest = read_manifest(manifest_path)
     return [get_model_status(entry, models_dir=models_dir) for entry in manifest]
+
+
+def resolve_best_model_path(
+    preferred_name: str | None = None,
+    manifest_path: str | Path | None = None,
+    models_dir: str | Path | None = None,
+) -> Path | None:
+    """Resolve the highest-priority ready GGUF model path across configured stores."""
+    try:
+        statuses = list_models_status(manifest_path=manifest_path, models_dir=models_dir)
+    except Exception:
+        statuses = []
+
+    if preferred_name:
+        pref_low = preferred_name.strip().lower()
+        for st in statuses:
+            if st.status == "ready" and st.local_path and (
+                st.entry.name.lower() == pref_low
+                or st.entry.canonical_filename.lower() == pref_low
+                or st.local_path.name.lower() == pref_low
+            ):
+                return st.local_path
+        for d in get_search_model_dirs(models_dir):
+            cand = d / preferred_name
+            if cand.is_file():
+                return cand
+
+    # Prioritize recommended / fine-tuned models first
+    for st in sorted(statuses, key=lambda s: (not s.entry.recommended, not s.entry.is_finetuned)):
+        if st.status == "ready" and st.local_path:
+            return st.local_path
+
+    # Fallback: scan for any .gguf (preferring v2 / dense / finetuned)
+    all_ggufs: list[Path] = []
+    for d in get_search_model_dirs(models_dir):
+        if d.is_dir():
+            all_ggufs.extend(sorted(d.glob("*.gguf")))
+    if not all_ggufs:
+        return None
+    for f in all_ggufs:
+        low = f.name.lower()
+        if "v2" in low and ("dense" in low or "finetun" in low):
+            return f
+    for f in all_ggufs:
+        low = f.name.lower()
+        if "dense" in low or "finetun" in low:
+            return f
+    return all_ggufs[0]
+
+
+def read_runtime_packs(manifest_path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Read optional `runtime_packs` metadata entries from manifest.json."""
+    try:
+        path = resolve_manifest_path(manifest_path)
+        if not path.is_file():
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("runtime_packs"), list):
+            return [dict(item) for item in data["runtime_packs"] if isinstance(item, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def get_runtime_bin_dir(custom_dir: str | Path | None = None) -> Path:
+    """Resolve user-writable directory for storing `llama-server` runtime binaries."""
+    if custom_dir:
+        p = Path(custom_dir).resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    if sys.platform == "win32":
+        local_app = os.environ.get("LOCALAPPDATA")
+        if local_app:
+            p = Path(local_app) / "NLAgent" / "bin"
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+    p = Path.home() / ".nlagent" / "bin"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def install_runtime_zip(zip_path: str | Path, dest_dir: str | Path | None = None) -> Path:
+    """
+    Safely extract a llama-server runtime zip archive into the local bin directory
+    and return the resolved path to `llama-server.exe` (or `llama-server`).
+    """
+    import zipfile
+
+    zpath = Path(zip_path).resolve()
+    if not zpath.is_file():
+        raise FileNotFoundError(f"Runtime archive not found: {zpath}")
+
+    target_dir = get_runtime_bin_dir(dest_dir)
+    target_root = target_dir.resolve()
+    bin_names = ("llama-server.exe", "llama-server")
+
+    with zipfile.ZipFile(zpath, "r") as zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            member_path = Path(member.filename)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                raise ValueError(f"Unsafe zip member path: {member.filename}")
+            # Flatten nested directory prefixes safely inside target_root
+            rel_name = member_path.name
+            if not rel_name:
+                continue
+            out_path = (target_root / rel_name).resolve()
+            if out_path.parent != target_root:
+                raise ValueError(f"Unsafe zip member path: {member.filename}")
+            with zf.open(member, "r") as src, open(out_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            if sys.platform != "win32" and rel_name in bin_names:
+                out_path.chmod(0o755)
+
+    for bname in bin_names:
+        cand = target_root / bname
+        if cand.is_file():
+            return cand
+    raise FileNotFoundError(f"No llama-server executable found inside {zpath.name}")
 

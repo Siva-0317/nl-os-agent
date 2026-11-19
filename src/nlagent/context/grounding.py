@@ -323,6 +323,65 @@ def search_files(
     return deduped
 
 
+def _resolve_explicit_windows_paths(request: str) -> list[GroundedFile]:
+    """
+    Resolve explicit Windows drive/system folder mentions (without crawling trees)
+    when no strict GroundingConfig.allowed_folders policy restricts discovery.
+    """
+    if os.name != "nt":
+        return []
+
+    candidates: list[Path] = []
+    # 1. Explicit full Windows path tokens like C:\ProgramData or C:\Windows\System32
+    for m in re.finditer(r"\b([A-Za-z]:(?:\\[^\s\"'<>|,;]+)+)", request):
+        p = Path(m.group(1))
+        if p.exists() and p not in candidates:
+            candidates.append(p)
+
+    # 2. Drive letter paired with well-known Windows folder names (e.g. "System32 ... from C:")
+    drive_match = re.search(r"\b([A-Za-z]):(?![\\/]\S)", request)
+    if drive_match:
+        drive_root = f"{drive_match.group(1).upper()}:\\"
+        req_lower = request.lower()
+        known_folders = {
+            "system32": Path(drive_root) / "Windows" / "System32",
+            "windows": Path(drive_root) / "Windows",
+            "programdata": Path(drive_root) / "ProgramData",
+            "program files (x86)": Path(drive_root) / "Program Files (x86)",
+            "program files": Path(drive_root) / "Program Files",
+            "users": Path(drive_root) / "Users",
+        }
+        matched_named = False
+        for key, folder_path in known_folders.items():
+            if key in req_lower and folder_path.is_dir():
+                if folder_path not in candidates:
+                    candidates.append(folder_path)
+                matched_named = True
+        if not matched_named:
+            root_p = Path(drive_root)
+            if root_p.is_dir() and root_p not in candidates:
+                candidates.append(root_p)
+
+    grounded: list[GroundedFile] = []
+    for p in candidates[:5]:
+        try:
+            st = p.stat()
+            is_d = p.is_dir()
+            grounded.append(
+                GroundedFile(
+                    path=p,
+                    rel_path=str(p),
+                    name=p.name or str(p),
+                    size_bytes=0 if is_d else st.st_size,
+                    mtime=st.st_mtime,
+                    is_dir=is_d,
+                )
+            )
+        except OSError:
+            continue
+    return grounded
+
+
 def ground_request(
     request: str,
     cwd: str | Path,
@@ -335,6 +394,12 @@ def ground_request(
     and format them into a sanitized FILES context block.
     """
     clean_req = request.lower()
+
+    # Fast-path explicit Windows system/drive directory hints when unconfined by GroundingConfig
+    if not (config and config.allowed_folders):
+        win_explicit = _resolve_explicit_windows_paths(request)
+        if win_explicit:
+            return format_files_block(win_explicit, max_files=k)
 
     # Common semantic type hints in natural language requests
     ext_hints: list[str] = []
