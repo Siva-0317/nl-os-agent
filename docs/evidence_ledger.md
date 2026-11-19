@@ -15,8 +15,8 @@
 | `results/context_eval.jsonl` | result | 120 | *(none)* | *(none)* |  | ❌ Missing | MISSING_PROVENANCE | ❌ **`INVALID`** |
 | `results/e0.jsonl` | result | 50 | *(none)* | *(none)* | read_only: 21, state_modifying: 16, destructive: 13 | ❌ Missing | MISSING_PROVENANCE | ❌ **`INVALID`** |
 | `results/e0_real.jsonl` | result | 50 | lm-studio | NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf | read_only: 21, state_modifying: 16, destructive: 13 | ✅ Yes | *(clean)* | **`VALID`** |
-| `results/e5_dev.jsonl` | result | 400 | llama-server | NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf | 4 conditions (total 400) | ✅ Yes | *(clean)* | **`VALID`** |
-| `results/e5_matrix.jsonl` | result | 200 | mock | NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf | 4 conditions (total 200) | ✅ Yes | MOCK_OR_DEMO_BACKEND | ❌ **`INVALID`** |
+| `results/e5_dev.jsonl` | result | 400 | llama-server | NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf, NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf (`22cb89cb`) | 4 conditions (total 400) | ✅ Yes | *(clean)* | **`VALID`** |
+| `results/e5_matrix.jsonl` | result | 200 | llama-server | NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf, NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf (`22cb89cb`) | 4 conditions (total 200) | ✅ Yes | *(clean)* | **`VALID`** |
 | `results/e5_sealed.jsonl` | result | 200 | llama-server | NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf | 4 conditions (total 200) | ✅ Yes | *(clean)* | **`VALID`** |
 | `results/hardware_matrix.jsonl` | result | 3 | llama-server-cpu, llama-server-cuda, llama-server-vulkan | NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf |  | ✅ Yes | *(clean)* | **`VALID`** |
 | `results/latency_breakdown.jsonl` | result | 200 | mock | NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf | reasoning_on: 100, reasoning_off: 100 | ✅ Yes | MOCK_OR_DEMO_BACKEND | ❌ **`INVALID`** |
@@ -35,6 +35,8 @@
 | `datasets/dev_v3.jsonl` | dataset | 100 | *(none)* | *(none)* | 4 conditions (total 100) | N/A (Dataset) | *(clean)* | **`VALID`** |
 | `datasets/e5_sealed.jsonl` | dataset | 50 | *(none)* | *(none)* | file_ops: 29, read_only: 12, clarification: 9 | N/A (Dataset) | *(clean)* | **`VALID`** |
 | `datasets/finetune_train.jsonl` | dataset | 7200 | *(none)* | *(none)* | 6 conditions (total 7200) | N/A (Dataset) | *(clean)* | **`VALID`** |
+| `datasets/finetune_v2_train.jsonl` | dataset | 10800 | *(none)* | *(none)* | 5 conditions (total 10800) | N/A (Dataset) | *(clean)* | **`VALID`** |
+| `datasets/finetune_v2_val.jsonl` | dataset | 1200 | *(none)* | *(none)* | 5 conditions (total 1200) | N/A (Dataset) | *(clean)* | **`VALID`** |
 | `datasets/finetune_val.jsonl` | dataset | 800 | *(none)* | *(none)* | 6 conditions (total 800) | N/A (Dataset) | *(clean)* | **`VALID`** |
 | `datasets/safety_bench.jsonl` | dataset | 73 | *(none)* | *(none)* | 14 conditions (total 73) | N/A (Dataset) | *(clean)* | **`VALID`** |
 | `datasets/safety_bench_v2_attacks.jsonl` | dataset | 120 | *(none)* | *(none)* | 10 conditions (total 120) | N/A (Dataset) | *(clean)* | **`VALID`** |
@@ -105,17 +107,15 @@ The evidence ledger enforces a **hard gate**: if ANY dependency of `make_figures
 ### 🟢 `results/e5_dev.jsonl` (VALID)
 - **Type**: Result | **Rows**: 400
 - **Backends**: `['llama-server']`
-- **Models**: `['NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf']`
+- **Models**: `['NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf', 'NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf']`
 - **Provenance Present**: Yes
 - **Condition Breakdown**: `{'base+full': 100, 'base+short': 100, 'tuned+full': 100, 'tuned+short': 100}`
 
-### 🔴 `results/e5_matrix.jsonl` (INVALID)
+### 🟢 `results/e5_matrix.jsonl` (VALID)
 - **Type**: Result | **Rows**: 200
-- **Backends**: `['mock']`
-- **Models**: `['NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf']`
+- **Backends**: `['llama-server']`
+- **Models**: `['NVIDIA-Nemotron-3-Nano-4B-Dense-Q4_K_M.gguf', 'NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf']`
 - **Provenance Present**: Yes
-- **Flags Raised**: MOCK_OR_DEMO_BACKEND
-- **Reasons**: Contains mock/demo/simulated backend: 'mock'
 - **Condition Breakdown**: `{'base+full': 50, 'base+short': 50, 'tuned+full': 50, 'tuned+short': 50}`
 
 ### 🟢 `results/e5_sealed.jsonl` (VALID)
@@ -244,6 +244,20 @@ The evidence ledger enforces a **hard gate**: if ANY dependency of `make_figures
 - **Models**: `[]`
 - **Provenance Present**: No
 - **Condition Breakdown**: `{'file_ops': 2391, 'process_control': 1139, 'sys_info': 1078, 'git_vcs': 1038, 'networking': 827, 'clarification': 727}`
+
+### 🟢 `datasets/finetune_v2_train.jsonl` (VALID)
+- **Type**: Dataset | **Rows**: 10800
+- **Backends**: `[]`
+- **Models**: `[]`
+- **Provenance Present**: No
+- **Condition Breakdown**: `{'file_ops': 4173, 'read_only': 3251, 'process_mgmt': 1726, 'clarification': 972, 'git_vcs': 678}`
+
+### 🟢 `datasets/finetune_v2_val.jsonl` (VALID)
+- **Type**: Dataset | **Rows**: 1200
+- **Backends**: `[]`
+- **Models**: `[]`
+- **Provenance Present**: No
+- **Condition Breakdown**: `{'file_ops': 472, 'read_only': 372, 'process_mgmt': 173, 'clarification': 108, 'git_vcs': 75}`
 
 ### 🟢 `datasets/finetune_val.jsonl` (VALID)
 - **Type**: Dataset | **Rows**: 800
