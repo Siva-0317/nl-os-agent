@@ -368,3 +368,19 @@ def test_hostile_filename_injection_prompt_safety(hostile_sandbox_tree: Path):
         assert "<file>" in grounded_block
         assert "</file>" in grounded_block
 
+
+def test_ground_request_explicit_windows_paths_respect_policy(sandbox_tree: Path):
+    if os.name != "nt":
+        return
+
+    # 1. Unconfined interactive mode detects existing C:\ProgramData without crawling trees
+    if Path("C:\\ProgramData").is_dir():
+        block = ground_request("show all hidden files in ProgramData from C:", cwd=sandbox_tree, k=5)
+        assert "ProgramData" in block
+        assert "<file>" in block
+
+    # 2. Strict policy GroundingConfig must STILL confine search to allowed_folders
+    cfg = GroundingConfig(allowed_folders=[sandbox_tree])
+    confined = ground_request("show all hidden files in ProgramData from C:", cwd=sandbox_tree, config=cfg, k=5)
+    assert "ProgramData" not in confined
+

@@ -284,3 +284,32 @@ class TestHardBlocksAndOpaqueExecution:
         eff = analyse("runas /user:Administrator cmd.exe", cwd=ws["root"])
         assert eff.protected_hit is True
         assert tier_from_effect(eff) == "privileged"
+
+    def test_new_item_add_content_rename_item_and_empty_glob(self, win_temp_workspace):
+        ws = win_temp_workspace
+        # New-Item Directory creation must be state_modifying (not read_only)
+        eff_dir = analyse("New-Item -ItemType Directory -Force -Path ui_demo_out", cwd=ws["root"])
+        assert tier_from_effect(eff_dir) == "state_modifying"
+        assert any("ui_demo_out" in c for c in eff_dir.creates)
+
+        # Add-Content on existing file must be state_modifying (appends)
+        eff_ac = analyse(f'Add-Content -Path "{ws["sample"]}" -Value "more"', cwd=ws["root"])
+        assert tier_from_effect(eff_ac) == "state_modifying"
+        assert ws["sample"] in eff_ac.appends
+
+        # Rename-Item must be destructive (deletes old name + creates new name)
+        eff_rni = analyse(f'Rename-Item -Path "{ws["sample"]}" -NewName "renamed.txt"', cwd=ws["root"])
+        assert tier_from_effect(eff_rni) == "destructive"
+        assert ws["sample"] in eff_rni.deletes
+        assert any("renamed.txt" in c for c in eff_rni.creates)
+
+        # Remove-Item with unmatched glob yields 0 deletes initially, then escalates to destructive once matched (TOCTOU safe)
+        eff_empty = analyse("Remove-Item -Path *.tmp -Recurse -Force", cwd=ws["root"])
+        assert eff_empty.deletes == []
+        assert tier_from_effect(eff_empty) == "read_only"
+        tmp_file = os.path.join(ws["root"], "stale.tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            f.write("tmp")
+        eff_populated = analyse("Remove-Item -Path *.tmp -Recurse -Force", cwd=ws["root"])
+        assert tier_from_effect(eff_populated) == "destructive"
+        assert tmp_file in eff_populated.deletes

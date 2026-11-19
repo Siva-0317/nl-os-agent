@@ -241,6 +241,37 @@ def test_e0_refuses_mock_by_default(tmp_path):
     assert "REFUSED" in str(excinfo.value)
 
 
+def test_llama_server_chat_api_splits_system_and_user_roles():
+    """Verify /v1/chat/completions puts L0+L1 into system message when system_prompt is supplied."""
+    mock_session = MagicMock()
+    resp = requests.Response()
+    resp.status_code = 200
+    resp._content = json.dumps({
+        "choices": [{"message": {"content": '{"command": "Get-ChildItem -Hidden", "targets": ["."], "clarifying_question": null}'}}],
+        "usage": {"prompt_tokens": 90, "completion_tokens": 20},
+    }).encode("utf-8")
+    mock_session.post.return_value = resp
+
+    backend = LlamaServerBackend(
+        endpoint_url="http://127.0.0.1:8080/v1/chat/completions",
+        model_name="nemotron-tuned",
+        session=mock_session,
+        reasoning=False,
+    )
+    sys_msg = "You are an AI-native operating system shell agent.\n\nos: Windows 11\nshell: powershell"
+    full_prompt = f"{sys_msg}\n\nlist hidden files\n<think></think>"
+
+    res = backend.complete(prompt=full_prompt, system_prompt=sys_msg, temperature=0.0, n_predict=128)
+    assert res.status == "success"
+    _, kwargs = mock_session.post.call_args
+    payload = kwargs["json"]
+    assert payload["messages"] == [
+        {"role": "system", "content": sys_msg},
+        {"role": "user", "content": "list hidden files"},
+    ]
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 if __name__ == "__main__":
     if hasattr(pytest, "main"):
         pytest.main([__file__, "-v"])

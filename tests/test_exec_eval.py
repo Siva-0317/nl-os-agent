@@ -226,6 +226,35 @@ class TestExecutionEvaluator(unittest.TestCase):
         self.assertEqual(summary["read_only"]["passed"], 1)
         self.assertEqual(summary["state_modifying"]["passed"], 1)
 
+    def test_compare_stdout_normalizes_tempdirs_and_free_bytes(self):
+        cand_dir = Path(r"C:\Users\alice\AppData\Local\Temp\tmp111aaaa")
+        ref_dir = Path(r"C:\Users\alice\AppData\Local\Temp\tmp222bbbb")
+
+        # PowerShell Get-ChildItem header
+        ps_cand = "Directory: C:\\Users\\alice\\AppData\\Local\\Temp\\tmp111aaaa\n\n-a----  README.md"
+        ps_ref = "Directory: C:\\Users\\alice\\AppData\\Local\\Temp\\tmp222bbbb\n\n-a----  README.md"
+        self.assertTrue(compare_stdout(ps_cand, ps_ref, cand_dir=cand_dir, ref_dir=ref_dir))
+
+        # MSYS bash pwd mounted under /tmp/<dirname>
+        self.assertTrue(compare_stdout("/tmp/tmp111aaaa\n", "/tmp/tmp222bbbb\n", cand_dir=cand_dir, ref_dir=ref_dir))
+
+        # Windows cmd dir output with differing bytes free footer
+        cmd_cand = "Directory of C:\\Users\\alice\\AppData\\Local\\Temp\\tmp111aaaa\n 1 File(s) 2 bytes\n 63,415,746,560 bytes free"
+        cmd_ref = "Directory of C:\\Users\\alice\\AppData\\Local\\Temp\\tmp222bbbb\n 1 File(s) 2 bytes\n 63,414,607,872 bytes free"
+        self.assertTrue(compare_stdout(cmd_cand, cmd_ref, cand_dir=cand_dir, ref_dir=ref_dir))
+
+    def test_strip_transient_test_artifacts_ignores_pytest_cache(self):
+        from nlagent.eval.exec_eval import _strip_transient_test_artifacts
+
+        raw = {
+            "deleted": [],
+            "created": [".pytest_cache/README.md", "src/__pycache__/a.cpython-311.pyc", "real_mutation.txt"],
+            "modified": [],
+            "perm": [],
+        }
+        cleaned = _strip_transient_test_artifacts(raw)
+        self.assertEqual(cleaned["created"], ["real_mutation.txt"])
+
 
 if __name__ == "__main__":
     unittest.main()
