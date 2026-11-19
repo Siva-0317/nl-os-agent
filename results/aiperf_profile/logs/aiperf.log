@@ -1,0 +1,75 @@
+2026-11-13 21:59:54.263 - aiperf.cli_runner - INFO - Starting AIPerf System
+2026-11-13 21:59:54.789 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/gpt2 "HTTP/1.1 307 Temporary Redirect"
+2026-11-13 21:59:55.015 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/openai-community/gpt2 "HTTP/1.1 200 OK"
+2026-11-13 21:59:55.018 - aiperf.cli_runner - INFO - ✓ Tokenizer gpt2 detected
+2026-11-13 21:59:55.019 - aiperf.cli_runner - INFO - 1 tokenizer validated • 0.8s
+2026-11-13 21:59:55.079 - aiperf - WARNING - Using --osl without ignore_eos or min_tokens in --extra-inputs. Output sequence length cannot be guaranteed unless the server honors these parameters. Consider: --extra-inputs ignore_eos:true (generate until max_tokens) or --extra-inputs min_tokens:<value> (set minimum output length).
+2026-11-13 21:59:55.543 - system_controller - INFO - GPU telemetry disabled via --no-gpu-telemetry
+2026-11-13 21:59:57.080 - system_controller - INFO - Registered Dataset Manager (id: 'dataset_manager')
+2026-11-13 21:59:57.234 - system_controller - INFO - Registered Worker Manager (id: 'worker_manager')
+2026-11-13 21:59:57.445 - system_controller - INFO - Registered Timing Manager (id: 'timing_manager')
+2026-11-13 21:59:57.446 - system_controller - INFO - Registered Server Metrics Manager (id: 'server_metrics_manager')
+2026-11-13 21:59:57.476 - system_controller - INFO - Registered Records Manager (id: 'records_manager')
+2026-11-13 21:59:57.680 - system_controller - INFO - AIPerf System is CONFIGURING
+2026-11-13 21:59:57.680 - system_controller - INFO - Configuring all services to start profiling
+2026-11-13 21:59:57.684 - timing_manager - INFO - Waiting for dataset to be configured before configuring timing
+2026-11-13 21:59:57.685 - dataset_manager - INFO - Configuring tokenizer(s) for dataset manager
+2026-11-13 21:59:57.691 - system_controller - INFO - Server metrics disabled - no Prometheus endpoints reachable
+2026-11-13 21:59:58.973 - system_controller - INFO - Registered Worker (id: 'worker_39561765')
+2026-11-13 21:59:59.130 - system_controller - INFO - Registered Record Processor (id: 'record_processor_54db440d')
+2026-11-13 22:00:00.003 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/gpt2/revision/main "HTTP/1.1 307 Temporary Redirect"
+2026-11-13 22:00:00.268 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/openai-community/gpt2/revision/main "HTTP/1.1 200 OK"
+2026-11-13 22:00:00.599 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/config.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:00.599 - huggingface_hub.utils._http - WARNING - Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-11-13 22:00:00.856 - httpx - INFO - HTTP Request: GET https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/config.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:01.108 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:01.335 - httpx - INFO - HTTP Request: GET https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:01.574 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/gpt2/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-11-13 22:00:01.794 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/openai-community/gpt2/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-11-13 22:00:02.019 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/gpt2/tree/main?recursive=true&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-11-13 22:00:02.249 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/openai-community/gpt2/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-11-13 22:00:02.479 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/vocab.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:02.704 - httpx - INFO - HTTP Request: GET https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/vocab.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:02.989 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/merges.txt "HTTP/1.1 200 OK"
+2026-11-13 22:00:03.216 - httpx - INFO - HTTP Request: GET https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/merges.txt "HTTP/1.1 200 OK"
+2026-11-13 22:00:03.692 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/added_tokens.json "HTTP/1.1 404 Not Found"
+2026-11-13 22:00:03.913 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/special_tokens_map.json "HTTP/1.1 404 Not Found"
+2026-11-13 22:00:04.133 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/tokenizer.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:04.370 - httpx - INFO - HTTP Request: GET https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/tokenizer.json "HTTP/1.1 200 OK"
+2026-11-13 22:00:04.812 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/chat_template.jinja "HTTP/1.1 404 Not Found"
+2026-11-13 22:00:05.025 - dataset_manager - INFO - Tokenizer(s) configured in 7.34 seconds
+2026-11-13 22:00:05.025 - dataset_manager - INFO - Configuring dataset for dataset_manager
+2026-11-13 22:00:06.025 - SyntheticDatasetComposer - INFO - Using default sampling strategy for synthetic dataset: shuffle
+2026-11-13 22:00:06.052 - MemoryMapDatasetBackingStore_2f232717 - INFO - Memory-mapped backing store initialized (streaming to C:\Users\sivab\AppData\Local\Temp\aiperf_mmap_3a4874fd-63dc-456d-9094-630d16d77967\dataset.dat)
+2026-11-13 22:00:06.067 - MemoryMapDatasetBackingStore_2f232717 - INFO - Data file finalized: 100 conversations, 0.08 MB
+2026-11-13 22:00:06.068 - MemoryMapDatasetBackingStore_2f232717 - INFO - Index file created: C:\Users\sivab\AppData\Local\Temp\aiperf_mmap_3a4874fd-63dc-456d-9094-630d16d77967\index.dat
+2026-11-13 22:00:06.068 - dataset_manager - INFO - Backing store finalized: client_type=DatasetClientStoreType.MEMORY_MAP data_file_path=WindowsPath('C:/Users/sivab/AppData/Local/Temp/aiperf_mmap_3a4874fd-63dc-456d-9094-630d16d77967/dataset.dat') index_file_path=WindowsPath('C:/Users/sivab/AppData/Local/Temp/aiperf_mmap_3a4874fd-63dc-456d-9094-630d16d77967/index.dat') conversation_count=100 total_size_bytes=87956 compressed_data_file_path=None compressed_index_file_path=None compressed_size_bytes=0
+2026-11-13 22:00:06.069 - dataset_manager - INFO - sampling strategy: shuffle, unique conversations: 100, unique turn count: 100
+2026-11-13 22:00:06.070 - dataset_manager - INFO - Generating inputs.json file at D:\Final yr Proj\results\aiperf_profile\inputs.json
+2026-11-13 22:00:06.079 - dataset_manager - INFO - inputs.json file generated in 0.01 seconds
+2026-11-13 22:00:06.085 - PhaseOrchestrator_40967a77 - INFO - Initialized 1 phase(s): ['Profiling']
+2026-11-13 22:00:06.201 - dataset_manager - INFO - Dataset client initialized and freed 100 conversations from memory
+2026-11-13 22:00:06.201 - dataset_manager - INFO - Dataset configured in 1.18 seconds
+2026-11-13 22:00:06.202 - system_controller - INFO - All services configured in 8.52 seconds
+2026-11-13 22:00:06.202 - system_controller - INFO - AIPerf System is CONFIGURED
+2026-11-13 22:00:06.205 - system_controller - INFO - All services started profiling successfully
+2026-11-13 22:00:06.205 - system_controller - INFO - AIPerf System is PROFILING
+2026-11-13 22:00:06.210 - RateTiming - INFO - Creating interval generator: pattern=concurrency_burst, rate=None, smoothness=None
+2026-11-13 22:00:06.210 - PhaseRunner - NOTICE - Phase profiling started | target: 10 requests
+2026-11-13 22:00:06.211 - records_manager - INFO - Credit phase start: profiling
+2026-11-13 22:00:32.567 - PhaseRunner - NOTICE - Phase profiling sending complete | sent=10, completed=9, in_flight=1 | sessions: sent=10, completed=9
+2026-11-13 22:00:32.568 - records_manager - INFO - Sent 10 requests. Waiting for all to complete...
+2026-11-13 22:00:35.445 - PhaseRunner - NOTICE - Phase profiling complete | completed=10, cancelled=0, errors=0 | sessions: completed=10, cancelled=0 | elapsed=29.23s
+2026-11-13 22:00:35.445 - PhaseOrchestrator_40967a77 - NOTICE - All credits completed
+2026-11-13 22:00:35.446 - system_controller - INFO - Received credits complete from 'timing_manager'
+2026-11-13 22:00:35.446 - records_manager - INFO - Received CREDIT_PHASE_COMPLETE message, Phase complete: PhaseRecordsStats(phase=CreditPhase.PROFILING, start_ns=1794587406210690200, sent_end_ns=1794587432567128600, requests_end_ns=1794587435445336900, total_expected_requests=10, expected_duration_sec=None, expected_num_sessions=None, expected_grace_period_sec=None, final_requests_sent=None, final_requests_completed=10, final_requests_cancelled=0, final_request_errors=0, final_sent_sessions=None, final_completed_sessions=None, final_cancelled_sessions=None, timeout_triggered=False, grace_period_timeout_triggered=False, was_cancelled=False, records_end_ns=None, success_records=9, error_records=0)
+2026-11-13 22:00:35.446 - records_manager - NOTICE - All requests have completed, please wait for the results to be processed (currently 9 of 10 records processed)...
+2026-11-13 22:00:35.447 - records_manager - INFO - All credits complete, please wait for the results to be processed...
+2026-11-13 22:00:35.448 - records_manager - INFO - Processed 10 valid requests and 0 errors (10 total).
+2026-11-13 22:00:35.448 - records_manager - INFO - Received all records, processing now...
+2026-11-13 22:00:35.450 - records_manager - INFO - Waiting 2.0s for server metrics flush period...
+2026-11-13 22:00:37.446 - records_manager - INFO - Processing records results...
+2026-11-13 22:00:37.474 - records_manager - INFO - _finalize_and_process_results completed
+2026-11-13 22:00:37.475 - system_controller - INFO - All results received, initiating shutdown
+2026-11-13 22:00:38.085 - ExporterManager - INFO - Exporting all records
+2026-11-13 22:00:38.163 - ExporterManager - INFO - Exporting console data
