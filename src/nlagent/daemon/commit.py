@@ -13,6 +13,7 @@ On successful execution (exit code 0):
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -108,6 +109,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
     else:
         use_bash = bool(bash_exe and (sys.platform != "win32" or _should_use_bash_on_windows(command)))
 
+    cf = 0x08000000 if sys.platform == "win32" else 0
     try:
         if use_bash and bash_exe:
             proc = subprocess.run(
@@ -116,6 +118,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
                 text=True,
                 cwd=cwd,
                 timeout=45,
+                creationflags=cf,
             )
         else:
             # On Windows without functional bash, handle common POSIX file operations or fallback to cmd/powershell
@@ -203,6 +206,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
                         text=True,
                         cwd=cwd,
                         timeout=45,
+                        creationflags=cf,
                     )
                 else:
                     # Execute via PowerShell
@@ -212,6 +216,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
                         text=True,
                         cwd=cwd,
                         timeout=45,
+                        creationflags=cf,
                     )
                     # Only fallback to cmd.exe if shell preference is not powershell and command is not a PowerShell cmdlet
                     if proc.returncode != 0 and req_shell != "powershell":
@@ -224,6 +229,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
                                 text=True,
                                 cwd=cwd,
                                 timeout=45,
+                                creationflags=cf,
                             )
             else:
                 proc = subprocess.run(
@@ -233,6 +239,7 @@ def default_shell_runner(command: str, cwd: str, shell: str | None = None) -> tu
                     text=True,
                     cwd=cwd,
                     timeout=45,
+                    creationflags=cf,
                 )
 
         output = (proc.stdout or "").strip()

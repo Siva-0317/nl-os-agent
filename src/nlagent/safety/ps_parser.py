@@ -217,6 +217,7 @@ class PersistentPowerShellParser:
             return False
 
         try:
+            cf = 0x08000000 if sys.platform == "win32" else 0
             # Inline worker script encoded into powershell command
             # Pass via -Command with streaming stdin
             self._proc = subprocess.Popen(
@@ -227,6 +228,7 @@ class PersistentPowerShellParser:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                creationflags=cf,
             )
             self._available = True
             return True

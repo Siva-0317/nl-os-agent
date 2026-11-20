@@ -538,9 +538,10 @@ def analyse(
             preview_cmd = [c for c in inv.raw_tokens if c != "-delete"]
             e.notes.append("find -delete: preview via `%s`" % " ".join(preview_cmd))
             import subprocess
-
+            import sys
+            cf = 0x08000000 if sys.platform == "win32" else 0
             try:
-                r = subprocess.run(preview_cmd, cwd=cwd, capture_output=True, text=True, timeout=10)
+                r = subprocess.run(preview_cmd, cwd=cwd, capture_output=True, text=True, timeout=10, creationflags=cf)
                 for line in r.stdout.splitlines():
                     p = line if os.path.isabs(line) else os.path.join(cwd, line)
                     e.deletes.append(p)

@@ -25,6 +25,7 @@ from typing import Any, Mapping, Optional
 
 import requests
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -219,6 +221,101 @@ class CommitWorker(QThread):
 # -----------------------------------------------------------------------------
 
 
+def explain_execution_failure(command: str, output: str, exit_code: int) -> tuple[str, str]:
+    """Analyze command execution errors and produce a clear, human-understandable explanation and remedy."""
+    out_lower = output.lower()
+
+    # 1. Directory not empty or locked by system/driver
+    if "cannot remove item" in out_lower and ("not empty" in out_lower or "directoryinfo" in out_lower or "removefilesystemitemioerror" in out_lower):
+        return (
+            "Protected System Directory or In-Use Files",
+            "Why it cannot run: Windows prevented removing this directory because files or subfolders inside it "
+            "are actively locked by running system processes (such as Intel graphics drivers or hardware services), "
+            "or the folder is a protected root directory.\n\n"
+            "Solution: System directories like 'C:\\Intel' or 'C:\\Program Files' cannot be deleted while drivers are running. "
+            "To test deletion and quarantine rollback safely, create and delete a test directory in your workspace or user folder instead."
+        )
+
+    # 2. Access Denied / Permission Denied
+    if "access is denied" in out_lower or "unauthorizedaccess" in out_lower or "permissiondenied" in out_lower or "eperm" in out_lower:
+        return (
+            "Access Denied (Administrator Privileges Required)",
+            "Why it cannot run: The operating system denied permission for this operation. "
+            "Windows protects root and system directories from modification by standard user accounts.\n\n"
+            "Solution: To modify system-level paths, launch NL-OS-Agent as Administrator, or target user-accessible directories "
+            "(such as your workspace or user profile)."
+        )
+
+    # 3. File in use / sharing violation
+    if "used by another process" in out_lower or "sharing violation" in out_lower or "locked" in out_lower:
+        return (
+            "File or Directory In Use",
+            "Why it cannot run: A file inside the target location is currently opened and held by another running application.\n\n"
+            "Solution: Close the application or service that is currently using the file and try again."
+        )
+
+    # 4. Command not found
+    if "is not recognized" in out_lower or "commandnotfound" in out_lower:
+        return (
+            "Command Not Found",
+            f"Why it cannot run: The requested utility is not recognized by the active shell or is not in your system PATH.\n\n"
+            "Solution: Verify that the tool is installed and accessible from your environment PATH."
+        )
+
+    # 5. Path not found
+    if "cannot find path" in out_lower or "itemnotfound" in out_lower or "does not exist" in out_lower or "no such file" in out_lower:
+        return (
+            "Path Does Not Exist",
+            "Why it cannot run: The specified path or file could not be located on the filesystem.\n\n"
+            "Solution: Check the path spelling or verify that the item exists before attempting to operate on it."
+        )
+
+    # 6. Fallback with cleanest extracted error message
+    err_lines = [line.strip() for line in output.splitlines() if line.strip() and not line.strip().startswith("+")]
+    summary = err_lines[-1] if err_lines else f"Exited with code {exit_code}"
+    return (
+        f"Execution Failed (Exit {exit_code})",
+        f"Why it cannot run: The operating system shell returned error code {exit_code}.\n\n"
+        f"Details: {summary}\n\n"
+        "Solution: Review the command arguments, check permissions, or confirm the files are not locked."
+    )
+
+
+class PromptTextEdit(QPlainTextEdit):
+    """Spacious multi-line prompt input box with Enter-to-submit and Shift+Enter for newlines."""
+    submit_requested = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.returnPressed = self.submit_requested  # API compatibility with QLineEdit
+        self.setPlaceholderText(
+            "Describe what you want to inspect or run (e.g. 'show hidden files in C:\\ProgramData')...\nPress Enter to propose, Shift+Enter for new line"
+        )
+        self.setMinimumHeight(60)
+        self.setMaximumHeight(120)
+        self.setStyleSheet(
+            "font-size: 14px; font-family: 'Segoe UI', system-ui, sans-serif; "
+            "padding: 10px 14px; border-radius: 8px; "
+            "background-color: #0d1117; color: #f0f6fc; border: 1.5px solid #30363d;"
+        )
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:
+        self.setPlainText(text)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                event.accept()
+                self.submit_requested.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class WelcomeCard(QFrame):
     """Friendly onboarding card shown in the chat area before the first prompt."""
 
@@ -377,6 +474,28 @@ class ProposalCard(QFrame):
 
         layout.addLayout(btn_row)
 
+        # Error diagnostic explanation box
+        self.error_banner = QFrame()
+        self.error_banner.setObjectName("ErrorBanner")
+        self.error_banner.setStyleSheet(
+            "background-color: rgba(248, 81, 73, 0.12); "
+            "border: 1px solid rgba(248, 81, 73, 0.4); "
+            "border-radius: 6px; padding: 10px 12px; margin-top: 4px;"
+        )
+        eb_layout = QVBoxLayout(self.error_banner)
+        eb_layout.setContentsMargins(0, 0, 0, 0)
+        eb_layout.setSpacing(4)
+        self.lbl_error_title = QLabel("⚠ Command Could Not Be Completed")
+        self.lbl_error_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f85149;")
+        self.lbl_error_desc = QLabel("")
+        self.lbl_error_desc.setWordWrap(True)
+        self.lbl_error_desc.setStyleSheet("font-size: 12px; color: #e6edf3; line-height: 1.4;")
+        self.lbl_error_desc.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        eb_layout.addWidget(self.lbl_error_title)
+        eb_layout.addWidget(self.lbl_error_desc)
+        self.error_banner.setVisible(False)
+        layout.addWidget(self.error_banner)
+
         # Collapsible output pane
         self.output_box = QTextEdit()
         self.output_box.setReadOnly(True)
@@ -467,12 +586,16 @@ class ProposalCard(QFrame):
     def _toggle_output(self) -> None:
         vis = not self.output_box.isVisible()
         self.output_box.setVisible(vis)
-        self.btn_toggle_output.setText("Hide Output" if vis else "Show Output")
+        if getattr(self, "_last_exit_code", 0) != 0:
+            self.btn_toggle_output.setText("Hide Raw Terminal Error" if vis else "Show Raw Terminal Error")
+        else:
+            self.btn_toggle_output.setText("Hide Output" if vis else "Show Output")
 
     def set_execution_result(self, result: Mapping[str, Any]) -> None:
         """Render command output, exit status, and reveal Undo button if quarantined."""
         self._executed = True
         exit_code = int(result.get("exit_code", 0))
+        self._last_exit_code = exit_code
         status = str(result.get("status", "committed" if exit_code == 0 else "failed"))
         output = str(result.get("output") or "").strip()
         q_id = result.get("quarantine_id")
@@ -481,14 +604,22 @@ class ProposalCard(QFrame):
         if exit_code == 0:
             self.lbl_state.setText("✔ Executed (exit 0)")
             self.lbl_state.setStyleSheet("font-size: 11px; font-weight: 600; color: #3fb950;")
+            self.error_banner.setVisible(False)
+            self.output_box.setPlainText(output or "(Command completed with empty output)")
+            self.output_box.setVisible(True)
+            self.btn_toggle_output.setVisible(True)
+            self.btn_toggle_output.setText("Hide Output")
         else:
             self.lbl_state.setText(f"✘ {status.capitalize()} (exit {exit_code})")
             self.lbl_state.setStyleSheet("font-size: 11px; font-weight: 600; color: #f85149;")
-
-        self.output_box.setPlainText(output or "(Command completed with empty output)")
-        self.output_box.setVisible(True)
-        self.btn_toggle_output.setVisible(True)
-        self.btn_toggle_output.setText("Hide Output")
+            headline, explanation = explain_execution_failure(str(self.proposal.get("command") or ""), output, exit_code)
+            self.lbl_error_title.setText(f"⚠ {headline}")
+            self.lbl_error_desc.setText(explanation)
+            self.error_banner.setVisible(True)
+            self.output_box.setPlainText(output)
+            self.output_box.setVisible(False)
+            self.btn_toggle_output.setVisible(True)
+            self.btn_toggle_output.setText("Show Raw Terminal Error")
 
         if self._quarantine_id:
             self.btn_undo_card.setVisible(True)
@@ -496,11 +627,17 @@ class ProposalCard(QFrame):
     def set_execution_error(self, error_text: str) -> None:
         self.btn_approve.setEnabled(True)
         self.btn_cancel.setEnabled(True)
+        self._last_exit_code = 1
         self.lbl_state.setText("✘ Execution error")
         self.lbl_state.setStyleSheet("font-size: 11px; font-weight: 600; color: #f85149;")
+        headline, explanation = explain_execution_failure(str(self.proposal.get("command") or ""), error_text, 1)
+        self.lbl_error_title.setText(f"⚠ {headline}")
+        self.lbl_error_desc.setText(explanation)
+        self.error_banner.setVisible(True)
         self.output_box.setPlainText(error_text)
-        self.output_box.setVisible(True)
+        self.output_box.setVisible(False)
         self.btn_toggle_output.setVisible(True)
+        self.btn_toggle_output.setText("Show Raw Terminal Error")
 
 
 # -----------------------------------------------------------------------------
@@ -691,17 +828,18 @@ class ChatMainWindow(QMainWindow):
 
         # Bottom Composer
         composer = QHBoxLayout()
-        composer.setSpacing(8)
-        self.prompt_input = QLineEdit()
-        self.prompt_input.setPlaceholderText(
-            "Describe what you want to inspect or run (e.g. 'show hidden files in C:\\ProgramData')..."
-        )
-        self.prompt_input.setMinimumHeight(38)
+        composer.setSpacing(10)
+        composer.setContentsMargins(0, 4, 0, 0)
+        self.prompt_input = PromptTextEdit()
         self.prompt_input.returnPressed.connect(self.submit_prompt)
         composer.addWidget(self.prompt_input, 1)
 
         self.btn_send = QPushButton("Propose")
-        self.btn_send.setMinimumHeight(38)
+        self.btn_send.setMinimumHeight(60)
+        self.btn_send.setMinimumWidth(115)
+        self.btn_send.setStyleSheet(
+            "font-size: 14px; font-weight: 700; border-radius: 8px; background-color: #1f6feb; color: #ffffff;"
+        )
         set_style_property(self.btn_send, "variant", "primary")
         self.btn_send.clicked.connect(self.submit_prompt)
         composer.addWidget(self.btn_send)
@@ -811,12 +949,22 @@ class ChatMainWindow(QMainWindow):
         self._on_cwd_edited()
         shell = self.shell_combo.currentText()
         self.prompt_input.clear()
+
+        # Check if there was a pending clarifying question waiting for user's answer
+        actual_query = text
+        pending_context = getattr(self, "_pending_clarification", None)
+        if pending_context:
+            prior_req = pending_context.get("request", "")
+            actual_query = f"{prior_req}. Specifically: {text}"
+            self._pending_clarification = None
+
+        self._last_user_query = text
         self._append_feed_widget(UserMessageBubble(text=text, shell=shell, cwd=self.current_cwd))
         self._set_busy(True, "Synthesizing command & verifying safety...")
 
         self._propose_worker = ProposeWorker(
             client=self.client,
-            request_text=text,
+            request_text=actual_query,
             cwd=self.current_cwd,
             session_id=self.session_id,
             shell=shell,
@@ -838,7 +986,12 @@ class ChatMainWindow(QMainWindow):
 
         tier = str(proposal.get("tier", "")).lower()
         cmd = str(proposal.get("command") or "").strip()
-        if not cmd and proposal.get("clarifying_question"):
+        clar_q = proposal.get("clarifying_question")
+        if not cmd and clar_q:
+            self._pending_clarification = {
+                "request": getattr(self, "_last_user_query", ""),
+                "question": clar_q,
+            }
             self.prompt_input.setFocus()
             return
         if tier == "read_only" and cmd and self.chk_auto_run_readonly.isChecked():
@@ -895,6 +1048,7 @@ class ChatMainWindow(QMainWindow):
 
     def _on_card_cancel(self, _card: ProposalCard) -> None:
         self.lbl_thinking.setText("Proposal cancelled safely.")
+        self._pending_clarification = None
 
     def _execute_undo(self, _card: ProposalCard | None, quarantine_id: str | None) -> None:
         try:
