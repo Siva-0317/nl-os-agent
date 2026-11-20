@@ -76,13 +76,43 @@ def _get_ps_param(params: dict[str, Any], name: str, default: Any = None) -> Any
     return default
 
 
-def _walk(path: str) -> Iterator[str]:
-    """Recursively yield all files and directories contained within path, plus path itself."""
-    if os.path.isdir(path) and not os.path.islink(path):
-        for root, dirs, files in os.walk(path):
-            for n in files + dirs:
-                yield os.path.join(root, n)
+def _is_protected_target(p: str) -> bool:
+    """Fast check whether a path target touches a protected system directory."""
+    try:
+        norm_p = os.path.normpath(os.path.abspath(p)).replace("\\", "/")
+    except Exception:
+        norm_p = p.replace("\\", "/")
+    if norm_p in ("/", "C:/", "D:/") or (len(norm_p) == 3 and norm_p.endswith(":/")):
+        return True
+    for pr in PROTECTED:
+        if pr in ("/",):
+            continue
+        norm_pr = os.path.normpath(pr).replace("\\", "/").rstrip("/")
+        if norm_p == norm_pr or norm_p.startswith(norm_pr + "/"):
+            return True
+        if len(norm_p) >= 2 and norm_p[1] == ":":
+            without_drive = norm_p[2:]
+            if without_drive == norm_pr or without_drive.startswith(norm_pr + "/"):
+                return True
+    return False
+
+
+def _walk(path: str, max_items: int = 500) -> Iterator[str]:
+    """Recursively yield files and directories contained within path, plus path itself."""
     yield path
+    if _is_protected_target(path):
+        return
+    if os.path.isdir(path) and not os.path.islink(path):
+        count = 0
+        try:
+            for root, dirs, files in os.walk(path):
+                for n in files + dirs:
+                    yield os.path.join(root, n)
+                    count += 1
+                    if count >= max_items:
+                        return
+        except OSError:
+            pass
 
 
 def _size(path: str) -> int:
