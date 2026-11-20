@@ -130,9 +130,28 @@ def extract_json_proposal(raw_text: str) -> dict[str, Any]:
         try:
             parsed = json.loads(repaired)
         except json.JSONDecodeError:
-            raise ValueError(
-                f"Failed to parse model output as JSON: {exc}\nRaw output: {raw_text[:200]}"
-            ) from exc
+            # Heal truncated JSON (unclosed quotes or unclosed braces from token cutoffs)
+            healed = repaired
+            in_string = False
+            escape = False
+            for ch in healed:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_string = not in_string
+            if in_string:
+                healed += '"'
+            open_braces = healed.count('{') - healed.count('}')
+            if open_braces > 0:
+                healed += '}' * open_braces
+            try:
+                parsed = json.loads(healed)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"Failed to parse model output as JSON: {exc}\nRaw output: {raw_text[:200]}"
+                ) from exc
 
     if not isinstance(parsed, dict):
         raise ValueError(
@@ -195,7 +214,7 @@ def propose(
     env: dict[str, Any] | None = None,
     system_prompt: str | None = None,
     temperature: float = 0.0,
-    n_predict: int = 256,
+    n_predict: int = 512,
     reasoning: bool = True,
     config: Any | None = None,
     profile: UserProfile | None = None,

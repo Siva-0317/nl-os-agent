@@ -58,6 +58,12 @@ def build():
             print("  Copying model (hardlink not supported)...")
             shutil.copy2(model_src, model_dst)
 
+    # Ensure Quick Start instructions and launcher batch file are bundled
+    for fname in ["README - HOW TO START.txt", "Start NL-OS-Agent.bat"]:
+        src_f = ROOT / "dist" / "nlagent" / fname
+        if not src_f.exists() and (ROOT / fname).exists():
+            shutil.copy2(ROOT / fname, src_f)
+
     print("\n[SUCCESS] Standalone distribution ready at dist/nlagent!")
 
 if __name__ == "__main__":
